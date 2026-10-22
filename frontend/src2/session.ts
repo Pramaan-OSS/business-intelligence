@@ -1,0 +1,140 @@
+import { call } from 'frappe-ui'
+import { computed, reactive } from 'vue'
+
+type SessionUser = {
+	email: string
+	first_name: string
+	last_name: string
+	full_name: string
+	user_image: string
+	is_admin: boolean
+	is_user: boolean
+	can_download: boolean
+	/** Whether this user may add or change Trusted code. */
+	can_write_trusted_code: boolean
+	locale: string
+	has_desk_access?: boolean
+	has_demo_data: boolean
+}
+
+// Settings of the site, not of whoever is reading it. A guest opening a public
+// dashboard gets these and nothing else, so a shared chart prints its amounts
+// the same way the workbook does.
+type CurrencySymbol = { symbol: string; symbol_on_right: boolean }
+type SiteInfo = {
+	country: string
+	/** The day a week is counted from, as `Insights Settings` names it. */
+	week_starts_on: string
+	/** The date a fiscal year starts on: `Insights Settings`, else ERPNext's current Fiscal Year. */
+	fiscal_year_start: string
+	// stands in for a measure that names no currency column
+	currency: string | null
+	// starts with the site currency; each result adds its codes
+	currency_symbols: Record<string, CurrencySymbol>
+	app_version: string
+	/** Whether the site is in developer mode. Exporting a workbook to an app needs it. */
+	developer_mode: boolean
+}
+
+const emptySite: SiteInfo = {
+	country: '',
+	week_starts_on: 'Monday',
+	fiscal_year_start: '1995-04-01',
+	currency: null,
+	currency_symbols: {},
+	app_version: '',
+	developer_mode: false,
+}
+
+const emptyUser: SessionUser = {
+	email: '',
+	first_name: '',
+	last_name: '',
+	full_name: '',
+	user_image: '',
+	is_admin: false,
+	is_user: false,
+	can_download: true,
+	can_write_trusted_code: false,
+	locale: 'en-US',
+	has_demo_data: false,
+}
+
+const session = reactive({
+	user: { ...emptyUser },
+	site: { ...emptySite },
+	initialized: false,
+	isLoggedIn: computed(() => false),
+	isAuthorized: computed(() => false),
+	initialize,
+	fetchSessionInfo,
+	fetchSiteInfo,
+	login,
+	logout,
+	resetSession,
+})
+
+// @ts-ignore
+session.isLoggedIn = computed(() => session.user.email && session.user.email !== 'Guest')
+// @ts-ignore
+session.isAuthorized = computed(() => session.user.is_admin || session.user.is_user)
+
+async function initialize(force: boolean = false) {
+	if (session.initialized && !force) return
+	Object.assign(session.user, getSessionFromCookies())
+	// the site's own settings reach a guest too, so they are fetched apart from
+	// the user's, and alongside them rather than after
+	await Promise.all([fetchSiteInfo(), session.isLoggedIn ? fetchSessionInfo() : null])
+	session.initialized = true
+}
+
+async function fetchSessionInfo() {
+	if (!session.isLoggedIn) return
+	const userInfo: SessionUser = await call('insights.api.get_user_info')
+	Object.assign(session.user, {
+		...userInfo,
+		is_admin: Boolean(userInfo.is_admin),
+		is_user: Boolean(userInfo.is_user),
+		has_desk_access: Boolean(userInfo.has_desk_access),
+		has_demo_data: Boolean(userInfo.has_demo_data),
+		can_download: Boolean(userInfo.can_download),
+		can_write_trusted_code: Boolean(userInfo.can_write_trusted_code),
+	})
+}
+
+async function fetchSiteInfo() {
+	const siteInfo: SiteInfo = await call('insights.api.get_site_info')
+	Object.assign(session.site, siteInfo)
+}
+
+async function login(email: string, password: string) {
+	resetSession()
+	const userInfo = await call('login', { usr: email, pwd: password })
+	if (!userInfo) return
+	Object.assign(session.user, userInfo)
+	window.location.reload()
+}
+
+async function logout() {
+	resetSession()
+	await call('logout')
+	window.location.reload()
+}
+
+function resetSession() {
+	Object.assign(session.user, { ...emptyUser })
+}
+
+function getSessionFromCookies() {
+	return document.cookie
+		.split('; ')
+		.map((c) => c.split('='))
+		.reduce((acc, [key, value]) => {
+			key = key === 'user_id' ? 'email' : key
+			acc[key] = decodeURIComponent(value)
+			return acc
+		}, {} as any)
+}
+
+export default session
+export type Session = typeof session

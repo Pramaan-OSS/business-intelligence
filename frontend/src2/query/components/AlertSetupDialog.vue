@@ -1,0 +1,285 @@
+<script setup lang="tsx">
+import { Textarea, toast } from 'frappe-ui'
+import { computed, reactive, unref } from 'vue'
+import Toggle from '../../components/Toggle.vue'
+import { waitUntil, wheneverChanges } from '../../helpers'
+import session from '../../session'
+import { __ } from '../../translation'
+import useUserStore from '../../users/users'
+import useAlertStore from '../alert'
+import { Query } from '../query'
+import ExpressionEditor from './ExpressionEditor.vue'
+
+const props = defineProps<{ query: Query; alert_name: string }>()
+const show = defineModel()
+
+const alert = useAlertStore().getAlert(props.alert_name)
+
+const filterCondition = reactive({
+	left: '',
+	operator: '==',
+	right: '',
+})
+
+waitUntil(() => alert.isloaded).then(() => {
+	if (alert.doc.condition) {
+		const regex = /q\['(.*)'\] ([!=><]+) (.*)/
+		const match = alert.doc.condition.match(regex)
+		if (match) {
+			filterCondition.left = match[1]
+			filterCondition.operator = match[2]
+			filterCondition.right = match[3]
+		}
+	}
+})
+
+wheneverChanges(
+	() => filterCondition,
+	() => {
+		alert.doc.custom_condition = 0
+		alert.doc.condition = `q['${filterCondition.left}'] ${filterCondition.operator} ${filterCondition.right}`
+	},
+	{ deep: true },
+)
+
+const userStore = useUserStore()
+// Saving a new or disabled alert enables it. An alert runs as the user who
+// enabled it.
+const runsAs = computed(() => {
+	const enabler = alert.islocal || alert.doc.disabled ? '' : alert.doc.permission_user
+	if (!enabler || enabler === session.user.email) {
+		return __('Runs as you, so it sends the rows you can see.')
+	}
+	return __(
+		'Runs as {0}, so it sends the rows they can see.',
+		userStore.getName(enabler) || enabler,
+	)
+})
+
+const isValidAlert = computed(() => {
+	if (!alert.doc.title) return false
+	if (!alert.doc.frequency) return false
+	if (alert.doc.frequency === 'Cron' && !alert.doc.cron_format) return false
+	if (!alert.doc.channel) return false
+	if (alert.doc.channel === 'Email' && !alert.doc.recipients) return false
+	if (alert.doc.scheduled_report) return alert.doc.channel === 'Email'
+	if (alert.doc.custom_condition && !alert.doc.condition) return false
+	if (!alert.doc.custom_condition && !filterCondition.left) return false
+	if (!alert.doc.custom_condition && !filterCondition.operator) return false
+	if (!alert.doc.custom_condition && !filterCondition.right) return false
+	if (!alert.doc.message) return false
+	return true
+})
+
+function updateAlert() {
+	if (!alert.isdirty) return
+	if (!isValidAlert.value) return
+
+	const isNew = unref(alert.islocal)
+	if (isNew) {
+		alert.doc.query = props.query.doc.name
+	}
+	alert.doc.disabled = 0
+	return alert.save().then(() => {
+		toast.success(isNew ? __('Alert Created') : __('Alert Updated'), {
+			description: isNew
+				? __(`Alert "{0}" has been created.`, alert.doc.title)
+				: __(`Alert "{0}" has been updated.`, alert.doc.title),
+		})
+		show.value = false
+	})
+}
+
+function testSendAlert() {
+	if (!isValidAlert.value) return
+	if (alert.islocal) {
+		alert.doc.query = props.query.doc.name
+	}
+	return alert.call('test_alert').then(() => {
+		toast.success(__('Alert Sent'), {
+			description: __(`Alert "{0}" has been sent.`, alert.doc.title),
+		})
+	})
+}
+
+function toggleAlert() {
+	alert.doc.disabled = alert.doc.disabled ? 0 : 1
+	return alert.save().then(() => {
+		toast.success(alert.doc.disabled ? __('Alert Disabled') : __('Alert Enabled'), {
+			description: alert.doc.disabled
+				? __(`Alert "{0}" has been disabled.`, alert.doc.title)
+				: __(`Alert "{0}" has been enabled.`, alert.doc.title),
+		})
+	})
+}
+</script>
+
+<template>
+	<Dialog
+		v-model:open="show"
+		:dismissible="!(alert.isdirty || alert.islocal)"
+		:title="__('Setup Alert')"
+		size="2xl"
+		:actions="[
+			{
+				label: __('Send Test Alert'),
+				disabled: !isValidAlert || alert.loading || alert.saving,
+				loading: alert.loading,
+				onClick: testSendAlert,
+			},
+			{
+				label: alert.doc.disabled ? __('Enable Alert') : __('Disable Alert'),
+				disabled: alert.loading || alert.saving,
+				loading: alert.loading,
+				onClick: toggleAlert,
+			},
+			{
+				label: alert.islocal ? __('Create Alert') : __('Update Alert'),
+				variant: 'solid',
+				disabled: !isValidAlert || !alert.isdirty || alert.saving || alert.loading,
+				loading: alert.saving,
+				onClick: updateAlert,
+			},
+		]"
+	>
+		<template #default>
+			<div class="flex flex-col gap-3 text-base">
+				<Toggle :label="__('Email query report on every scheduled run')" v-model="alert.doc.scheduled_report" />
+				<p v-if="alert.doc.scheduled_report">{{ __('Saving approves email to these recipients on this schedule. Includes up to 100 rows.') }}</p>
+				<div class="flex gap-4">
+					<div class="flex flex-1 flex-col gap-3">
+						<FormControl
+							type="text"
+							:label="__('Alert Name')"
+							v-model="alert.doc.title"
+							:placeholder="__('e.g. Low Inventory')"
+						/>
+						<FormControl
+							type="select"
+							:label="__('Frequency')"
+							v-model="alert.doc.frequency"
+							:options="[
+								{ value: 'Hourly', label: __('Check once an hour') },
+								{ value: 'Daily', label: __('Check once a day') },
+								{ value: 'Weekly', label: __('Check once a week') },
+								{ value: 'Monthly', label: __('Check once a month') },
+								{ value: 'Cron', label: __('Cron') },
+							]"
+						/>
+						<FormControl
+							v-if="alert.doc.frequency === 'Cron'"
+							type="text"
+							:label="__('Cron')"
+							v-model="alert.doc.cron_format"
+							:placeholder="__('e.g. 0 0 12 * * ?')"
+						/>
+					</div>
+					<div class="flex flex-1 flex-col gap-3">
+						<FormControl
+							type="select"
+							:label="__('Channel')"
+							v-model="alert.doc.channel"
+							:options="[
+								{ label: __('Email'), value: 'Email' },
+								{ label: __('Channel message'), value: 'Telegram' },
+								{ label: __('In-app notification'), value: 'Notify' },
+								{ label: __('Send to workflow'), value: 'Workflow' },
+							]"
+						/>
+						<FormControl
+							v-if="alert.doc.channel === 'Email'"
+							type="text"
+							:label="__('Recipients')"
+							v-model="alert.doc.recipients"
+							:placeholder="__('e.g. john@example.com, henry@example.com')"
+						/>
+						<p
+							v-if="alert.doc.channel !== 'Email'"
+							class="text-xs text-ink-gray-5"
+						>
+							{{
+								__(
+									'Delivered through the targets set in Settings > Alert delivery.',
+								)
+							}}
+						</p>
+					</div>
+				</div>
+
+				<div v-if="!alert.doc.scheduled_report" class="flex flex-col">
+					<label class="mb-1.5 block text-xs text-ink-gray-5">{{
+						__('Send alert when')
+					}}</label>
+					<div class="flex gap-4" v-if="!alert.doc.custom_condition">
+						<FormControl
+							type="select"
+							class="flex-1"
+							:placeholder="__('Select Field')"
+							v-model="filterCondition.left"
+							:options="props.query.result.columnOptions"
+						/>
+						<FormControl
+							type="select"
+							class="flex-1"
+							v-model="filterCondition.operator"
+							:options="['==', '!=', '>', '>=', '<', '<=']"
+						/>
+						<FormControl
+							type="text"
+							class="flex-1"
+							v-model="filterCondition.right"
+							placeholder="e.g. 100"
+						/>
+					</div>
+					<div v-else>
+						<ExpressionEditor
+							language="python"
+							placeholder="e.g. order_count < 100"
+							class="inline-expression h-fit max-h-[10rem] min-h-[5rem] text-sm"
+							v-model="alert.doc.condition"
+							:column-options="props.query.result.columnOptions"
+						/>
+					</div>
+					<Toggle
+						class="mt-1.5"
+						:label="__('Use Custom Condition')"
+						v-model="alert.doc.custom_condition"
+					/>
+				</div>
+
+				<div v-if="!alert.doc.scheduled_report">
+					<Textarea
+						:label="__('Message')"
+						class="min-h-40 text-p-sm"
+						v-model="alert.doc.message"
+						:placeholder="`e.g.
+Hey,
+We have **low inventory** for **{{ title }}**.
+Please order more.
+Thanks,
+						`"
+					/>
+
+					<div class="mt-2 text-p-sm text-ink-gray-5">
+						{{
+							__(
+								'You can use markdown to format the message. Use double asterisks (**) for bold text. You can use the following fields in the message:',
+							)
+						}}
+
+						<div
+							v-html="
+								`<ul class='list-disc pl-4'>
+							<li>{{ rows }} - The result of the query</li>
+							<li>{{ count }} - The number of rows in the query</li>
+						</ul>`
+							"
+						/>
+					</div>
+				</div>
+
+				<p class="text-p-sm text-ink-gray-5">{{ runsAs }}</p>
+			</div>
+		</template>
+	</Dialog>
+</template>

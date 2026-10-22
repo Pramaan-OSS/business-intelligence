@@ -1,0 +1,69 @@
+<script setup lang="ts">
+import { __ } from '../../translation'
+import { SankeyChartConfig } from '../../types/chart.types'
+import { ColumnOption, DimensionOption } from '../../types/query.types'
+import CollapsibleSection from './CollapsibleSection.vue'
+import InlineFormControlLabel from '../../components/InlineFormControlLabel.vue'
+import DimensionPicker from './DimensionPicker.vue'
+import MeasurePicker from './MeasurePicker.vue'
+import NumberFormatSection from './NumberFormatSection.vue'
+
+const props = defineProps<{
+	dimensions: DimensionOption[]
+	columnOptions: ColumnOption[]
+}>()
+
+const config = defineModel<SankeyChartConfig>({
+	required: true,
+	default: () => ({
+		source_column: {},
+		target_column: {},
+		value_column: {},
+	}),
+})
+</script>
+
+<template>
+	<CollapsibleSection :title="__('Options')">
+		<div class="flex flex-col gap-3 pt-1">
+			<DimensionPicker
+				:label="__('Source')"
+				v-model="config.source_column"
+				:options="props.dimensions"
+			/>
+			<DimensionPicker
+				:label="__('Target')"
+				v-model="config.target_column"
+				:options="props.dimensions"
+			/>
+			<MeasurePicker
+				:label="__('Value')"
+				v-model="config.value_column"
+				:column-options="props.columnOptions"
+			/>
+			<InlineFormControlLabel :label="__('Orientation')" control-width="7rem">
+				<FormControl
+					v-model="config.orient"
+					type="select"
+					:options="[
+						{ label: __('Horizontal'), value: 'horizontal' },
+						{ label: __('Vertical'), value: 'vertical' },
+					]"
+				/>
+			</InlineFormControlLabel>
+			<InlineFormControlLabel :label="__('Align')" control-width="6rem">
+				<FormControl
+					v-model="config.node_align"
+					type="select"
+					:options="[
+						{ label: __('Justify'), value: 'justify' },
+						{ label: __('Left'), value: 'left' },
+						{ label: __('Right'), value: 'right' },
+					]"
+				/>
+			</InlineFormControlLabel>
+		</div>
+	</CollapsibleSection>
+
+	<NumberFormatSection :config="config" :sole-measure-name="config.value_column?.measure_name" />
+</template>

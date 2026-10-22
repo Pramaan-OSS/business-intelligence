@@ -1,0 +1,273 @@
+import frappe
+
+app_name = "insights"
+app_title = "Business Intelligence"
+app_publisher = "Business Intelligence"
+app_description = "Self-hosted business intelligence: queries, charts, dashboards and alerts"
+app_icon = "octicon octicon-file-directory"
+app_color = "grey"
+app_email = "hello@example.com"
+app_license = "GNU Affero General Public License v3.0"
+
+export_python_type_annotations = True
+require_type_annotated_api_methods = True
+
+# Sites that already serve something at /insights (e.g. a website page) can move
+# the app elsewhere by setting `insights_path` in site config. Stored without
+# slashes so everything below can build paths as f"/{insights_path}".
+# `website_route_rules` and `add_to_apps_screen` are plain module-level data, so
+# the path has to be known at import time; a bench process serving several sites
+# takes the value of whichever site imported this module first.
+insights_path = (frappe.conf.insights_path or "insights").strip("/") or "insights"  # nosemgrep
+
+add_to_apps_screen = [
+    {
+        "name": "insights",
+        "logo": "/assets/insights/frontend/app-mark.svg",
+        "title": "Business Intelligence",
+        "route": f"/{insights_path}",
+        "has_permission": "insights.permissions.check_app_permission",
+    }
+]
+
+# Includes in <head>
+# ------------------
+
+# include js, css files in header of desk.html
+# app_include_css = "/assets/insights/css/insights.css"
+
+# a desk page with an island needs the app's mount path to build links
+extend_bootinfo = "insights.desk.boot_app_path"
+
+# include js, css files in header of web template
+# web_include_css = "/assets/insights/css/insights.css"
+# web_include_js = "/assets/insights/js/insights.js"
+base_template = "insights/templates/website_base.html"
+
+# include custom scss in every website theme (without file extension ".scss")
+# website_theme_scss = "insights/public/scss/website"
+
+# include js, css files in header of web form
+# webform_include_js = {"doctype": "public/js/doctype.js"}
+# webform_include_css = {"doctype": "public/css/doctype.css"}
+
+# include js in page
+# page_js = {"page" : "public/js/file.js"}
+
+# include js in doctype views
+# doctype_js = {"doctype" : "public/js/doctype.js"}
+# doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
+# doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
+# doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}
+
+# Home Pages
+# ----------
+
+# application home page (will override Website Settings)
+# home_page = "login"
+
+# website user home page (by Role)
+# role_home_page = {
+# 	"Role": "home_page"
+# }
+
+# Generators
+# ----------
+
+# automatically create page for each record of this doctype
+# website_generators = ["Web Page"]
+
+# Jinja
+# ----------
+
+# add methods and filters to jinja environment
+# jinja = {
+# 	"methods": "insights.utils.jinja_methods",
+# 	"filters": "insights.utils.jinja_filters"
+# }
+
+# Installation
+# ------------
+
+# before_install = "insights.install.before_install"
+after_install = "insights.migrate.after_migrate"
+after_migrate = "insights.migrate.after_migrate"
+after_app_install = "insights.migrate.after_app_install"
+
+before_request = ["insights.framework_services.install_transport"]
+before_job = ["insights.framework_services.install_transport"]
+
+after_request = ["insights.insights.doctype.insights_data_source_v3.insights_data_source_v3.after_request"]
+
+fixtures = [
+    {
+        "dt": "Insights Data Source v3",
+        "filters": {"name": "Site DB"},
+    },
+]
+
+# Uninstallation
+# ------------
+
+# before_uninstall = "insights.uninstall.before_uninstall"
+# after_uninstall = "insights.uninstall.after_uninstall"
+
+# Desk Notifications
+# ------------------
+# See frappe.core.notifications.get_notification_config
+
+# notification_config = "insights.notifications.get_notification_config"
+
+# Permissions
+# -----------
+# Permissions evaluated in scripted ways
+
+permission_query_conditions = {
+    "Insights Data Source v3": "insights.permissions.get_permission_query_conditions",
+    "Insights Table v3": "insights.permissions.get_permission_query_conditions",
+    "Insights Team": "insights.permissions.get_permission_query_conditions",
+    "Insights Workbook": "insights.permissions.get_permission_query_conditions",
+    "Insights Query v3": "insights.permissions.get_permission_query_conditions",
+    "Insights Chart v3": "insights.permissions.get_permission_query_conditions",
+    "Insights Dashboard v3": "insights.permissions.get_permission_query_conditions",
+    "Insights Alert": "insights.permissions.get_permission_query_conditions",
+    "Insights Folder": "insights.permissions.get_permission_query_conditions",
+}
+
+has_permission = {
+    "Insights Data Source v3": "insights.permissions.has_doc_permission",
+    "Insights Table v3": "insights.permissions.has_doc_permission",
+    "Insights Team": "insights.permissions.has_doc_permission",
+    "Insights Workbook": "insights.permissions.has_doc_permission",
+    "Insights Query v3": "insights.permissions.has_doc_permission",
+    "Insights Chart v3": "insights.permissions.has_doc_permission",
+    "Insights Dashboard v3": "insights.permissions.has_doc_permission",
+    "Insights Alert": "insights.permissions.has_doc_permission",
+    "Insights Folder": "insights.permissions.has_doc_permission",
+}
+
+# DocType Class
+# ---------------
+# Override standard doctype classes
+
+# override_doctype_class = {
+# 	"ToDo": "custom_app.overrides.CustomToDo"
+# }
+
+# Document Events
+# ---------------
+# Hook on document methods and events
+
+doc_events = {
+    "System Settings": {"validate": "insights.framework_services.enforce_local_settings"},
+    "Email Account": {"validate": "insights.framework_services.refuse_vendor_setup"},
+    "Social Login Key": {"validate": "insights.framework_services.refuse_vendor_setup"},
+    "User": {
+        "on_change": "insights.insights.doctype.insights_team.insights_team.update_admin_team",
+    },
+    # a desk document that links to Insights content renders through an
+    # Insights island — see insights/desk.py
+    "Dashboard": {
+        "onload": "insights.desk.claim",
+    },
+    "Dashboard Chart": {
+        "onload": "insights.desk.claim",
+    },
+    "DocShare": {
+        "validate": "insights.permissions.validate_member_share",
+    },
+    # child tables of workbook members
+    ("Insights Dashboard Chart v3", "Has Role", "Insights Query Variable"): {
+        "validate": "insights.permissions.refuse_member_row_alone",
+        "on_trash": "insights.permissions.refuse_member_row_alone",
+    },
+}
+
+# Scheduled Tasks
+# ---------------
+
+scheduler_events = {
+    "all": [
+        "insights.insights.doctype.insights_alert.insights_alert.send_alerts",
+        "insights.api.data_store.sync_tables",
+    ],
+    "weekly": [
+        "insights.insights.doctype.insights_data_source_v3.data_warehouse.cleanup_data_store",
+    ],
+    "hourly": [
+        "insights.api.data_store.update_failed_sync_status",
+        "insights.insights.doctype.insights_table_import_job.insights_table_import_job.run_scheduled_imports",
+    ],
+}
+
+default_log_clearing_doctypes = {
+    "Insights Query Execution Log": 90,
+}
+
+# Testing
+# -------
+
+before_tests = "insights.tests.utils.before_tests"
+
+# Overriding Methods
+# ------------------------------
+#
+# override_whitelisted_methods = {
+# 	"frappe.desk.doctype.event.event.get_events": "insights.event.get_events"
+# }
+#
+# each overriding function accepts a `data` argument;
+# generated from the base implementation of the doctype dashboard,
+# along with any modifications made in other Frappe apps
+# override_doctype_dashboards = {
+# 	"Task": "insights.task.get_dashboard_data"
+# }
+
+# exempt linked doctypes from being automatically cancelled
+#
+# auto_cancel_exempted_doctypes = ["Auto Repeat"]
+
+
+# User Data Protection
+# --------------------
+
+# user_data_fields = [
+# 	{
+# 		"doctype": "{doctype_1}",
+# 		"filter_by": "{filter_by}",
+# 		"redact_fields": ["{field_1}", "{field_2}"],
+# 		"partial": 1,
+# 	},
+# 	{
+# 		"doctype": "{doctype_2}",
+# 		"filter_by": "{filter_by}",
+# 		"partial": 1,
+# 	},
+# 	{
+# 		"doctype": "{doctype_3}",
+# 		"strict": False,
+# 	},
+# 	{
+# 		"doctype": "{doctype_4}"
+# 	}
+# ]
+
+# Authentication and authorization
+# --------------------------------
+
+# auth_hooks = [
+# 	"insights.auth.validate"
+# ]
+
+page_renderer = "insights.utils.InsightsPageRenderer"
+
+website_route_rules = [
+    {"from_route": f"/{insights_path}/<path:app_path>", "to_route": "_insights"},
+    {"from_route": f"/{insights_path}", "to_route": "_insights"},
+]
+
+standard_queries = {
+    "Insights Query v3": "insights.api.search.search_workbook_items",
+    "Insights Chart v3": "insights.api.search.search_workbook_items",
+    "Insights Dashboard v3": "insights.api.search.search_workbook_items",
+}

@@ -1,0 +1,185 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2023-03-30 16:39:47.081742",
+ "default_view": "List",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "disabled",
+  "scheduled_report",
+  "permission_user",
+  "section_break_cmx9",
+  "title",
+  "channel",
+  "query",
+  "frequency",
+  "cron_format",
+  "last_execution",
+  "next_execution",
+  "column_break_ktop",
+  "recipients",
+  "condition",
+  "custom_condition",
+  "section_break_ikjw",
+  "message"
+ ],
+ "fields": [
+  {
+   "fieldname": "query",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Query",
+   "options": "Insights Query v3",
+   "reqd": 1,
+   "set_only_once": 1
+  },
+  {
+   "default": "Hourly",
+   "fieldname": "frequency",
+   "fieldtype": "Select",
+   "label": "Frequency",
+   "options": "Hourly\nDaily\nWeekly\nMonthly\nCron"
+  },
+  {
+   "fieldname": "column_break_ktop",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Email",
+   "fieldname": "channel",
+   "fieldtype": "Select",
+   "label": "Channel",
+   "options": "Email\nTelegram\nNotify\nWorkflow"
+  },
+  {
+   "depends_on": "eval: doc.channel == \"Email\"",
+   "fieldname": "recipients",
+   "fieldtype": "Small Text",
+   "label": "Recipients",
+   "mandatory_depends_on": "eval: doc.channel == \"Email\""
+  },
+  {
+   "fieldname": "title",
+   "fieldtype": "Data",
+   "label": "Title",
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "disabled",
+   "fieldtype": "Check",
+   "label": "Disabled"
+  },
+  {
+   "fieldname": "permission_user",
+   "fieldtype": "Link",
+   "label": "Based on Permissions For User",
+   "options": "User",
+   "permlevel": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_cmx9",
+   "fieldtype": "Section Break"
+  },
+  {
+   "depends_on": "eval: doc.frequency == \"Cron\"",
+   "fieldname": "cron_format",
+   "fieldtype": "Data",
+   "label": "Cron Format"
+  },
+  {
+   "fieldname": "last_execution",
+   "fieldtype": "Datetime",
+   "label": "Last Execution",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "next_execution",
+   "fieldtype": "Datetime",
+   "is_virtual": 1,
+   "label": "Next Execution",
+   "no_copy": 1
+  },
+  {
+   "fieldname": "section_break_ikjw",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "message",
+   "fieldtype": "Markdown Editor",
+   "label": "Message"
+  },
+  {
+   "fieldname": "condition",
+   "fieldtype": "Code",
+   "in_list_view": 1,
+   "label": "Condition",
+   "reqd": 0
+  },
+  {
+   "default": "0",
+   "fieldname": "custom_condition",
+   "fieldtype": "Check",
+   "label": "Custom Condition"
+  },
+  {
+   "fieldname": "scheduled_report",
+   "fieldtype": "Check",
+   "label": "Email query report on every scheduled run",
+   "default": "0"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-09-23 18:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Insights",
+ "name": "Insights Alert",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Insights Admin",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Insights User",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "permlevel": 1,
+   "read": 1,
+   "role": "Insights Admin"
+  },
+  {
+   "permlevel": 1,
+   "read": 1,
+   "role": "Insights User"
+  }
+ ],
+ "row_format": "Dynamic",
+ "show_title_field_in_link": 1,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "title"
+}

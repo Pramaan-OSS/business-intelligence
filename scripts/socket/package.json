@@ -1,0 +1,8 @@
+{
+  "dependencies": {
+    "cookie": "^1.0.2",
+    "redis": "^4.7.1",
+    "socket.io": "^4.8.3",
+    "superagent": "^10.3.0"
+  }
+}

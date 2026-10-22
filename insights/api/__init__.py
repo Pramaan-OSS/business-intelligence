@@ -1,0 +1,269 @@
+# Copyright (c) 2022, Frappe Technologies Pvt. Ltd. and contributors
+# For license information, please see license.txt
+
+import json
+import os
+
+import frappe
+from frappe.handler import is_valid_http_method, is_whitelisted
+from frappe.monitor import add_data_to_monitor
+
+import insights
+from insights.decorators import insights_whitelist
+from insights.insights.doctype.insights_data_source_v3.ibis_utils import (
+    get_columns_from_schema,
+)
+from insights.insights.doctype.insights_table_v3.insights_table_v3 import (
+    InsightsTablev3,
+)
+from insights.insights.doctype.insights_team import insights_team
+from insights.insights.doctype.insights_team.insights_team import (
+    check_data_source_permission,
+)
+from insights.insights.query_builders.sql_functions import get_fiscal_year_start_date
+from insights.permissions import can_download
+from insights.utils import get_currency_symbols, get_owned_file
+
+
+@insights_whitelist()
+def get_app_version():
+    return frappe.get_attr("insights" + ".__version__")
+
+
+@frappe.whitelist(allow_guest=True)  # nosemgrep - the payload is the site's country and
+# currency, which a public dashboard already prints
+def get_site_info():
+    """Settings of the site, not of whoever reads it. A guest opening a public
+    dashboard needs them to print an amount the way the workbook does."""
+    return {
+        "country": frappe.db.get_single_value("System Settings", "country"),
+        # developer_mode decides whether an author may export a workbook to an
+        # app. Guests get none of them.
+        **(
+            {
+                "app_version": insights.__version__,
+                "developer_mode": bool(frappe.conf.developer_mode),
+            }
+            if frappe.session.user != "Guest"
+            else {}
+        ),
+        # The calendar the site counts by. A span the browser resolves (a week, a
+        # fiscal year to date) has to land on the days the server's `get_window`
+        # lands on. Both are site settings, not the reader's, so a guest gets them too.
+        "week_starts_on": frappe.db.get_single_value("Insights Settings", "week_starts_on") or "Monday",
+        # through the server's own fallback, so an unset field does not put the
+        # two calendars a quarter apart
+        "fiscal_year_start": get_fiscal_year_start_date().isoformat(),
+        **get_currency_info(),
+    }
+
+
+def get_currency_info():
+    """The site's currency: the code a measure that names no column prints in.
+
+    Its symbol is the one entry the client starts with.
+
+    The `currency` global default covers a site with ERPNext and one without:
+    ERPNext's Global Defaults writes `default_currency` into it, and plain Frappe
+    writes `System Settings.currency` into it.
+    """
+    # System Settings writes the default only when the field changes, so read the
+    # field too — a site installed with a currency has never "changed" it
+    currency = frappe.db.get_default("currency") or frappe.db.get_single_value("System Settings", "currency")
+    return {"currency": currency or None, "currency_symbols": get_currency_symbols([currency])}
+
+
+@frappe.whitelist()
+def get_user_info():
+    roles = frappe.get_roles()
+    is_user = "Insights User" in roles
+    is_admin = "Insights Admin" in roles
+
+    user = frappe.db.get_value(
+        "User", frappe.session.user, ["first_name", "last_name", "user_type", "language"], as_dict=1
+    )
+
+    locale = user.get("language") or frappe.db.get_single_value("System Settings", "language") or "en"
+
+    has_demo_data = False
+    if is_admin:
+        from insights.setup.setup_wizard import check_demo_data_exists
+
+        has_demo_data = check_demo_data_exists()
+
+    return {
+        "email": frappe.session.user,
+        "first_name": user.get("first_name"),
+        "last_name": user.get("last_name"),
+        "is_admin": is_admin,
+        "is_user": is_user or frappe.session.user == "Administrator",
+        "can_download": can_download(),
+        # matches `check_trusted_code_author`, which reads the Admin team, not the role
+        "can_write_trusted_code": insights_team.is_admin(frappe.session.user),
+        "locale": locale,
+        "has_desk_access": user.get("user_type") == "System User",
+        "has_demo_data": has_demo_data,
+    }
+
+
+def get_csv_file(filename: str):
+    file = get_owned_file(filename)
+    file_name = file.file_name or ""
+    parts = file.get_extension()
+    extension = parts[-1] if parts else ""
+    extension = extension.lstrip(".")
+
+    if not extension or extension not in ["csv", "xlsx", "json", "jsonl"]:
+        frappe.throw(
+            f"Only CSV, XLSX, JSON, and JSONL files are supported. Detected extension: '{extension}' from filename: '{file_name}'"
+        )
+    return file, extension
+
+
+def create_uploads_if_not_exists():
+    if not frappe.db.exists("Insights Data Source v3", "uploads"):
+        uploads = frappe.new_doc("Insights Data Source v3")
+        uploads.name = "uploads"
+        uploads.title = "Uploads"
+        uploads.database_type = "DuckDB"
+        uploads.database_name = "insights_file_uploads"
+        uploads.owner = "Administrator"
+        uploads.status = "Active"
+        uploads.insert(ignore_permissions=True)
+
+
+@insights_whitelist()
+def get_file_data(filename: str):
+    check_data_source_permission("uploads")
+
+    file, ext = get_csv_file(filename)
+    file_path = os.path.realpath(file.get_full_path())
+    file_name = file.file_name.split(".")[0]
+    file_name = frappe.scrub(file_name)
+
+    create_uploads_if_not_exists()
+    ds = frappe.get_doc("Insights Data Source v3", "uploads")
+    with ds.write_connection() as db:
+        try:
+            table = _read_uploaded_table(db, file_path, ext)
+            columns = get_columns_from_schema(table.schema())
+            rows = table.head(50).execute().fillna("").to_dict(orient="records")
+            row_count = table.count().execute()
+
+            return {
+                "tablename": file_name,
+                "rows": rows,
+                "columns": columns,
+                "total_rows": int(row_count),
+            }
+        except frappe.ValidationError:
+            raise
+        except Exception as e:
+            frappe.log_error(e)
+            raise
+
+
+@insights_whitelist(methods=["POST"])
+def import_csv_data(filename: str, tablename: str = ""):
+    check_data_source_permission("uploads")
+
+    file, ext = get_csv_file(filename)
+    file_path = os.path.realpath(file.get_full_path())
+    table_name = frappe.scrub(tablename) if tablename else frappe.scrub(file.file_name.split(".")[0])
+
+    create_uploads_if_not_exists()
+    ds = frappe.get_doc("Insights Data Source v3", "uploads")
+    with ds.write_connection() as db:
+        try:
+            table = _read_uploaded_table(db, file_path, ext)
+            db.create_table(table_name, table, overwrite=True)
+        except frappe.ValidationError:
+            raise
+        except Exception as e:
+            frappe.log_error(e)
+            frappe.throw("Failed to import uploaded file data into Insights uploads table. Please try again.")
+
+    InsightsTablev3.bulk_create(ds.name, [table_name])
+
+
+def _read_uploaded_table(db, file_path: str, ext: str):
+    try:
+        if ext == "xlsx":
+            return db.read_xlsx(file_path)
+
+        if ext in ["json", "jsonl"]:
+            return db.read_json(file_path)
+
+        return db.read_csv(file_path)
+
+    except Exception as e:
+        frappe.log_error(e)
+
+        if ext == "xlsx":
+            frappe.throw(
+                "Failed to read Excel data from uploaded file. Please ensure the file is a valid Excel format and try again."
+            )
+
+        if ext in ["json", "jsonl"]:
+            frappe.throw(
+                "Failed to read JSON data from uploaded file. Please ensure the file is a valid JSON or JSONL format and try again."
+            )
+
+        frappe.throw("Failed to read CSV data from uploaded file. Please try again.")
+
+
+# The Builder uses these two generic endpoints. A View does not: it goes
+# through `insights.api.view`, which checks `visibility`. So these grant only
+# what the caller's own permissions allow, and guests cannot call them.
+
+
+@frappe.whitelist()
+def get_doc(doctype: str, name: str | int):
+    from frappe.client import get as _get_doc
+
+    return _get_doc(doctype, name)
+
+
+def check_stored_document(doctype: str, name: str):
+    """Decide access against the stored document, not the caller's copy of it.
+
+    A method runs on a document built from the request body, so every field the
+    permission rules read is whatever the caller sent. A name with no row behind
+    it is a document the client has not saved, and discloses nothing.
+    """
+    if not frappe.db.exists(doctype, name):
+        return
+
+    if not frappe.has_permission(doctype, ptype="read", doc=name):
+        raise frappe.PermissionError("You don't have permission to access this document")
+
+
+@frappe.whitelist()
+def run_doc_method(method: str, docs: dict | str, args: dict | str | None = None):
+    docs = frappe.parse_json(docs)
+    doctype, name = docs.get("doctype"), docs.get("name")
+
+    # a name is one document's identity. A dict is a filter set to `frappe.db`,
+    # so it is not a name.
+    if not doctype or not name or not isinstance(name, str):
+        raise frappe.ValidationError("Invalid document")
+
+    check_stored_document(doctype, name)
+
+    doc = frappe.get_doc(docs)
+    args = frappe.parse_json(args)
+
+    method_obj = getattr(doc, method)
+    fn = getattr(method_obj, "__func__", method_obj)
+
+    doc.check_permission("read")
+    is_whitelisted(fn)
+    is_valid_http_method(fn)
+
+    new_kwargs = frappe.get_newargs(fn, args or {})
+    response = doc.run_method(method, **new_kwargs)
+    doc.apply_fieldlevel_read_permissions()
+    frappe.response.docs.append(doc)
+    frappe.response["message"] = response
+    add_data_to_monitor(methodname=method)
+    return response

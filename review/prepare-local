@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Prepare only pinned local dependencies. Never downloads anything at run time;
+# this script runs at build time (docker build) or on explicit preparation.
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$root"
+export PATH="$root/.tools/nodebin/bin:$PATH"
+command -v uv >/dev/null
+command -v node >/dev/null
+node -e 'if (Number(process.versions.node.split(".")[0]) < 20) throw new Error("Node 20 or newer is required.")'
+mkdir -p vendor
+if [ ! -d vendor/framework/.git ]; then
+  git init -q vendor/framework
+  git -C vendor/framework remote add origin https://github.com/frappe/frappe.git
+  git -C vendor/framework fetch --depth 1 origin e7ddbac9b5d9601e891dd57f01f4643a14f7f41c
+fi
+git -C vendor/framework checkout --detach e7ddbac9b5d9601e891dd57f01f4643a14f7f41c
+# Build the framework's website and desk bundles into its public/dist, using a
+# stub bench layout the esbuild script expects.
+build_bench="$root/.runtime/build-bench"
+mkdir -p "$build_bench/apps" "$build_bench/sites/assets"
+ln -sfn "$root/vendor/framework" "$build_bench/apps/frappe"
+ln -sfn "$root" "$build_bench/apps/insights"
+printf 'frappe\ninsights\n' > "$build_bench/sites/apps.txt"
+printf '{}' > "$build_bench/sites/assets/assets.json"
+(cd vendor/framework && npm install --no-audit --no-fund \
+  && ln -sfn "$root/vendor/framework/node_modules" "$root/vendor/framework/frappe/public/node_modules" \
+  && FRAPPE_BENCH_ROOT="$build_bench" npm run production)
+cp -R "$build_bench/sites/assets/frappe/dist" "$root/vendor/framework/frappe/public/dist"
+uv venv --python 3.14 .venv
+uv pip install --python .venv/bin/python -r review/runtime-lock.txt
+uv pip install --python .venv/bin/python --no-deps -e vendor/framework -e .
+mkdir -p .runtime/socket
+cp scripts/socket/package.json scripts/socket/package-lock.json .runtime/socket/
+npm --prefix .runtime/socket ci --no-audit --no-fund
+corepack enable >/dev/null 2>&1 || true
+yarn --cwd frontend install --frozen-lockfile
+yarn --cwd frontend build
+FRAPPE_BENCH_ROOT="$build_bench" yarn --cwd frontend build:islands
+# The built manifest and the island bundles serve through the runtime asset links.
+mkdir -p "$root/insights/public/dist"
+cp -R "$build_bench/sites/assets/insights/dist/island" "$root/insights/public/dist/island"
+cp "$build_bench/sites/assets/assets.json" "$root/review/built-assets.json"

@@ -1,0 +1,327 @@
+# Copyright (c) 2025, Frappe Technologies Pvt. Ltd. and contributors
+# For license information, please see license.txt
+
+from collections.abc import Callable
+
+import frappe
+import sqlglot as sg
+import sqlparse
+
+
+def runs_stored_procedure(raw_sql: str) -> bool:
+    """Whether a SQL query calls a stored procedure. A procedure runs as written,
+    so the reader's permissions do not limit the tables it reads."""
+    return sqlparse.format(raw_sql, strip_comments=True).strip().lower().startswith("exec")
+
+
+def extract_sql_table_refs(raw_sql: str, dialect: sg.Dialect | None = None) -> list[frappe._dict]:
+    try:
+        parsed = sg.parse_one(sqlparse.format(raw_sql, strip_comments=True), dialect=dialect)
+    except Exception:
+        return []  # nosemgrep - an unparseable query runs nothing, so it reads no table
+
+    table_refs = []
+    seen_refs = set()
+    for table_exp in real_table_refs(parsed):
+        table_name = table_exp.name
+        if not table_name:
+            continue
+
+        table_ref = frappe._dict(
+            name=table_name,
+            db=str(table_exp.db) if table_exp.db else None,
+            catalog=str(table_exp.catalog) if table_exp.catalog else None,
+        )
+        ref_key = (table_ref.name, table_ref.db, table_ref.catalog)
+        if ref_key in seen_refs:
+            continue
+
+        seen_refs.add(ref_key)
+        table_refs.append(table_ref)
+
+    return table_refs
+
+
+def real_table_refs(parsed: sg.Expression) -> list[sg.exp.Table]:
+    """Every table reference in a statement that names a real table. The
+    permission check and the rewrite that replaces each reference both use it.
+
+    A CTE hides a table name only inside its own query block. A subquery
+    aliased with a table's name hides it for that one source. sqlglot's scope
+    walk handles both, keyed by the reference's alias. If sqlglot cannot build
+    scopes for a statement, every reference counts as real, which restricts
+    more, never less.
+    """
+    from sqlglot.optimizer.scope import Scope, build_scope
+
+    root = build_scope(parsed)
+    if root is None:
+        return list(parsed.find_all(sg.exp.Table))
+
+    return [
+        table
+        for scope in root.traverse()
+        for table in scope.tables
+        if not isinstance(scope.sources.get(table.alias_or_name), Scope)
+    ]
+
+
+def extract_query_deps_from_operations(operations: list) -> list[str]:
+    """Extract all referenced query names from a list of operations."""
+    return [
+        op["table"]["query_name"]
+        for op in operations
+        if op.get("table")
+        and op.get("table", {}).get("type") == "query"
+        and op.get("table", {}).get("query_name")
+    ]
+
+
+def referenced_queries(operations) -> set[str]:
+    """The query names `operations` references, from a stored or parsed value."""
+    return set(extract_query_deps_from_operations(frappe.parse_json(operations) or []))
+
+
+def check_source_workbook(workbook: str | None, source: str) -> None:
+    """A query may only use queries of its own workbook as sources.
+
+    Datasets share queries across workbooks, not references. A source with no
+    row is not checked here; the build reports it as not found.
+    """
+    from insights.exceptions import QueryRefused
+
+    row = frappe.db.get_value("Insights Query v3", source, ["name", "workbook"], as_dict=True)
+    if not row or row.workbook == workbook:
+        return
+
+    # the message names no query, because the caller may not be allowed to read it
+    frappe.throw(frappe._("A query of another workbook cannot be a source here"), QueryRefused)
+
+
+def extract_table_deps_from_operations(operations: list) -> list[dict]:
+    """Extract all unique (data_source, table_name) pairs from a list of operations."""
+    seen: set[tuple] = set()
+    result = []
+    for op in operations:
+        tbl = op.get("table") or {}
+        if tbl.get("type") != "table":
+            continue
+        ds, tn = tbl.get("data_source"), tbl.get("table_name")
+        if not ds or not tn:
+            continue
+        key = (ds, tn)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append({"data_source": ds, "table_name": tn})
+    return result
+
+
+def extract_table_deps_from_sql_operations(operations: list) -> list[dict]:
+    """Extract unique (data_source, table_name) pairs from native SQL operations."""
+
+    from insights.insights.doctype.insights_data_source_v3.insights_data_source_v3 import (
+        db_type_to_sqlglot_dialect,
+    )
+
+    seen: set[tuple] = set()
+    result = []
+    for op in operations:
+        if op.get("type") != "sql":
+            continue
+        raw_sql = op.get("raw_sql") or ""
+        ds = op.get("data_source") or ""
+        if not raw_sql or not ds:
+            continue
+        db_type = frappe.db.get_value("Insights Data Source v3", ds, "database_type", cache=True)
+        dialect = db_type_to_sqlglot_dialect(db_type)
+        for ref in extract_sql_table_refs(raw_sql, dialect=dialect):
+            key = (ds, ref.name)
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append({"data_source": ds, "table_name": ref.name})
+    return result
+
+
+def table_references(operations) -> list[dict]:
+    """The (data_source, table_name) pairs `operations` reads.
+
+    A builder operation names its table outright. A native SQL operation has
+    it in the SQL, so it has to be parsed out.
+    """
+    ops = frappe.parse_json(operations) or []
+
+    seen: set[tuple] = set()
+    result = []
+    for ref in extract_table_deps_from_operations(ops) + extract_table_deps_from_sql_operations(ops):
+        key = (ref["data_source"], ref["table_name"])
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(ref)
+    return result
+
+
+def sync_query_references(query_name: str, operations) -> None:
+    """Rebuild edge rows for *query_name* in Insights Query Reference.
+
+    Deletes all existing outgoing edges for this query then inserts fresh
+    rows for every table and query reference found in operations.
+    """
+    from frappe.model.document import bulk_insert
+
+    ops = frappe.parse_json(operations) or []
+
+    docs = []
+    for tbl in table_references(ops):
+        ref = frappe.new_doc("Insights Query Reference")
+        ref.name = frappe.generate_hash(length=10)
+        ref.query = query_name
+        ref.ref_type = "Table"
+        ref.data_source = tbl["data_source"]
+        ref.table_name = tbl["table_name"]
+        docs.append(ref)
+
+    for dep_query in extract_query_deps_from_operations(ops):
+        ref = frappe.new_doc("Insights Query Reference")
+        ref.name = frappe.generate_hash(length=10)
+        ref.query = query_name
+        ref.ref_type = "Query"
+        ref.ref_query = dep_query
+        docs.append(ref)
+
+    frappe.db.delete("Insights Query Reference", {"query": query_name})
+    if docs:
+        bulk_insert("Insights Query Reference", docs)
+
+
+def query_operations(query_name: str, operations_by_name: dict[str, list] | None = None):
+    """A query's stored operations, from a lookup the caller prepared when it has one.
+
+    A caller walking every query on the site reads them all in one go and hands
+    the lookup down, so a walk of n hops costs one read instead of n.
+    """
+    if operations_by_name is not None:
+        return operations_by_name.get(query_name)
+    return frappe.db.get_value("Insights Query v3", query_name, "operations")
+
+
+def get_direct_dependencies(query_name: str, operations_by_name: dict[str, list] | None = None) -> list[str]:
+    """Return the query names this query directly depends on.
+
+    Read from the query's own `operations`, not from `Insights Query Reference`.
+    A forward edge is already in the row, and the edge table is rebuilt by a
+    background job that runs after the save commits, so it lags every write.
+
+    Only the edge table answers the reverse question - who references this query -
+    so `downstream_queries` reads it and lags one job. `get_lineage_graph` and
+    `get_last_execution_per_table` still read it forwards, where a report that
+    lags one job is the whole point of the index.
+    """
+    if not query_name:
+        return []
+
+    return list(referenced_queries(query_operations(query_name, operations_by_name)))
+
+
+def downstream_queries(start: str, readable: Callable[[set[str]], set[str]]) -> list[str]:
+    """The queries that read `start` through every hop, nearest first.
+
+    `readable` narrows each hop before the walk goes on, so a caller that may
+    not read a query is not walked through it either.
+    """
+    seen = {start}
+    frontier = {start}
+    found = []
+    while frontier:
+        reached = (
+            set(
+                frappe.get_all(
+                    "Insights Query Reference",
+                    filters={"ref_type": "Query", "ref_query": ["in", list(frontier)]},
+                    pluck="query",
+                    distinct=True,
+                )
+            )
+            - seen
+        )
+        if reached:
+            reached = readable(reached)
+        seen |= reached
+        found.extend(sorted(reached))
+        frontier = reached
+    return found
+
+
+def transitive_closure(
+    start: str, start_operations=None, operations_by_name: dict[str, list] | None = None
+) -> set[str]:
+    """Return all query names reachable from start (not including start itself).
+
+    `start_operations` walks from a document in hand rather than from the row. A
+    chart runs a query document that was never saved. Its row then answers with
+    another pipeline's operations, or with nothing.
+    """
+    reachable: set[str] = set()
+    stack = (
+        list(referenced_queries(start_operations))
+        if start_operations is not None
+        else get_direct_dependencies(start, operations_by_name)
+    )
+    while stack:
+        node = stack.pop()
+        if node in reachable:
+            continue
+        reachable.add(node)
+        stack.extend(get_direct_dependencies(node, operations_by_name))
+    return reachable
+
+
+def source_tables(
+    query_name: str, operations=None, operations_by_name: dict[str, list] | None = None
+) -> list[dict]:
+    """The tables a query reads, through every query it reads."""
+    if operations is None:
+        operations = query_operations(query_name, operations_by_name)
+
+    reachable = transitive_closure(query_name, operations, operations_by_name)
+    pipelines = [operations] + [query_operations(name, operations_by_name) for name in reachable]
+
+    seen: set[tuple] = set()
+    tables = []
+    for pipeline in pipelines:
+        for ref in table_references(pipeline):
+            key = (ref["data_source"], ref["table_name"])
+            if key in seen:
+                continue
+            seen.add(key)
+            tables.append(ref)
+    return tables
+
+
+def find_cycle(start: str, new_direct_deps: list[str]) -> list[str] | None:
+    """
+    Check whether declaring `new_direct_deps` as the direct dependencies of `start`
+    would form a cycle. Returns the cycle path (e.g. ["A", "B", "A"]) or None.
+
+    Used during validate() to catch cycles before they are persisted.
+    """
+    for dep in new_direct_deps:
+        path = _find_path(dep, target=start, path=[start, dep], visited=set())
+        if path is not None:
+            return path
+    return None
+
+
+def _find_path(current: str, target: str, path: list[str], visited: set[str]) -> list[str] | None:
+    if current == target:
+        return path
+    if current in visited:
+        return None
+    visited.add(current)
+    for dep in get_direct_dependencies(current):
+        result = _find_path(dep, target, [*path, dep], visited)
+        if result is not None:
+            return result
+    return None

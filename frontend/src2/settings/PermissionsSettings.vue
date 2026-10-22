@@ -1,0 +1,136 @@
+<script setup lang="tsx">
+import { watchDebounced } from '@vueuse/core'
+import { __ } from '../translation'
+import { Avatar } from 'frappe-ui'
+import { ListView } from 'frappe-ui/experimental'
+import { Plus } from 'lucide-vue-next'
+import { computed, ref } from 'vue'
+import NumberInput from '../components/NumberInput.vue'
+import { copy } from '../helpers'
+import session from '../session'
+import CreateTeamDialog from '../teams/CreateTeamDialog.vue'
+import ManageTeamDialog from '../teams/ManageTeamDialog.vue'
+import useTeamStore, { Team } from '../teams/teams'
+import SettingItem from './SettingItem.vue'
+import useSettings from './settings'
+
+const teamStore = useTeamStore()
+teamStore.getTeams()
+
+const settings = useSettings()
+settings.load()
+
+watchDebounced(
+	() => settings.doc,
+	() => {
+		if (settings.isdirty) {
+			settings.save()
+		}
+	},
+	{ debounce: 500, deep: true },
+)
+
+const searchQuery = ref('')
+const filteredTeams = computed(() => {
+	if (!searchQuery.value) {
+		return teamStore.teams
+	}
+	return teamStore.teams.filter((team) =>
+		team.team_name.toLowerCase().includes(searchQuery.value.toLowerCase()),
+	)
+})
+
+const listOptions = ref({
+	columns: [
+		{
+			label: __('Team Name'),
+			key: 'team_name',
+			prefix(props: any) {
+				const team = props.row as Team
+				return <Avatar size="md" label={team.team_name} />
+			},
+		},
+	],
+	rows: filteredTeams,
+	rowKey: 'team_name',
+	options: {
+		selectable: false,
+		showTooltip: false,
+		onRowClick: (team: Team) => {
+			editTeam.value = copy(team)
+			showEditTeamDialog.value = true
+		},
+		emptyState: {
+			title: __('No teams.'),
+			description: __('No teams to display.'),
+			button: session.user.is_admin
+				? {
+						label: __('Create Team'),
+						variant: 'solid',
+						onClick: () => (showCreateTeamDialog.value = true),
+				  }
+				: undefined,
+		},
+	},
+})
+
+const showCreateTeamDialog = ref(false)
+const showEditTeamDialog = ref(false)
+const editTeam = ref<Team | null>(null)
+</script>
+
+<template>
+	<div class="flex w-full flex-col gap-6 overflow-y-scroll p-8 px-10">
+		<h1 class="text-2xl-semibold">Permissions</h1>
+
+		<SettingItem
+			label="Enable"
+			description="Enable permissions to restrict access to data sources & tables based on teams and users."
+		>
+			<Toggle v-model="settings.doc.enable_permissions" />
+		</SettingItem>
+
+		<SettingItem
+			label="Allow Data Download"
+			description="Allow users to download query results as CSV or Excel. A user can download only if both this toggle is on and its export permission is granted on the query. When disabled, only admins can download data."
+		>
+			<Toggle v-model="settings.doc.allow_download" />
+		</SettingItem>
+
+		<SettingItem
+			label="Export Row Limit"
+			description="Maximum number of rows in a CSV or Excel download. Set to 0 for no limit. Default is 1,00,000"
+		>
+			<NumberInput v-model="settings.doc.max_export_rows" class="w-28" />
+		</SettingItem>
+
+		<div class="flex w-full flex-col gap-3">
+			<SettingItem
+				label="Teams"
+				description="Create teams to group users and manage permissions."
+			>
+				<Button
+					v-if="session.user.is_admin"
+					class="self-end"
+					label="New Team"
+					variant="outline"
+					@click="showCreateTeamDialog = true"
+				>
+					<template #prefix>
+						<Plus class="h-4 w-4 text-ink-gray-6" stroke-width="1.5" />
+					</template>
+				</Button>
+			</SettingItem>
+			<ListView v-bind="listOptions"> </ListView>
+		</div>
+	</div>
+
+	<CreateTeamDialog v-model="showCreateTeamDialog" />
+
+	<ManageTeamDialog
+		v-if="editTeam"
+		:key="editTeam.name"
+		v-model="showEditTeamDialog"
+		:team="editTeam"
+	/>
+</template>

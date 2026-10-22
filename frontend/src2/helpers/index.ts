@@ -1,0 +1,589 @@
+import { watchDebounced } from '@vueuse/core'
+import { __ } from '../translation'
+import { debounce, isEqual } from 'es-toolkit'
+import { call, toast } from 'frappe-ui'
+import type { Socket } from 'socket.io-client'
+import {
+	inject,
+	watch,
+	onBeforeUnmount,
+	watch as vueWatch,
+	WatchCallback,
+	WatchSource,
+	WatchStopHandle,
+} from 'vue'
+import { getFormattedDate } from '../query/helpers'
+import session from '../session'
+import {
+	ColumnDataType,
+	DataFormat,
+	DropdownOption,
+	GroupedDropdownOption,
+	QueryResultColumn,
+} from '../types/query.types'
+import { FIELDTYPES } from './constants'
+
+export function getUniqueId(length = 8) {
+	return (+new Date() * Math.random()).toString(36).substring(0, length)
+}
+
+export function copy<T>(obj: T) {
+	if (!obj) return obj
+	return JSON.parse(JSON.stringify(obj)) as T
+}
+
+export function wheneverChanges(source: WatchSource, callback: WatchCallback, options: any = {}) {
+	let preVal: any
+	return watchDebounced(
+		source,
+		(val, _, onCleanup) => {
+			// against a clone, because `preVal` is one — see `isDirty` in ./resource
+			if (isEqual(copy(val), preVal)) return
+			preVal = copy(val)
+			callback(val, preVal, onCleanup)
+		},
+		options,
+	)
+}
+
+export type WatchOptions = {
+	deep?: boolean
+	immediate?: boolean
+	debounce?: number
+	toggleCondition?: () => boolean
+}
+export function watchToggle(
+	source: WatchSource,
+	callback: WatchCallback,
+	options: WatchOptions = {},
+) {
+	const attachSourceWatcher = () => _watch(source, callback, options)
+
+	if (!options.toggleCondition) {
+		attachSourceWatcher()
+		return
+	}
+
+	if (options.toggleCondition) {
+		// only watch if condition is true
+		// stop the watcher if condition is false
+		let watching = false
+		let stop: WatchStopHandle
+		_watch(
+			options.toggleCondition,
+			(shouldWatch) => {
+				if (shouldWatch && !watching) {
+					watching = true
+					stop = attachSourceWatcher()
+				} else if (!shouldWatch && watching) {
+					watching = false
+					stop()
+				}
+			},
+			{
+				immediate: true,
+			},
+		)
+	}
+}
+
+function _watch(source: WatchSource, callback: WatchCallback, options: WatchOptions = {}) {
+	let _callback = callback
+
+	const debounced = options.debounce ? debounce(_callback, options.debounce) : undefined
+	if (debounced) _callback = debounced
+
+	// A debounced callback outlives the watcher: detaching the source leaves the
+	// queued call to fire. So the stop handle drops the queue as well, and a
+	// `toggleCondition` that has gone false gets no further callback — an
+	// autosave queued before an author started editing would otherwise write
+	// their arrangement mid-edit.
+	const stop = vueWatch(source, _callback, options)
+	return () => {
+		debounced?.cancel()
+		stop()
+	}
+}
+
+export function waitUntil(fn: () => boolean) {
+	return new Promise<void>((resolve) => {
+		if (fn()) {
+			resolve()
+			return
+		}
+		const stop = watch(fn, (value) => {
+			if (value) {
+				stop()
+				resolve()
+			}
+		})
+	})
+}
+
+export function store<T>(key: string, value: () => T) {
+	// vitest has no localStorage; the value still works, it is just not remembered
+	const storage = globalThis.localStorage
+	if (!storage) return value()
+
+	const stored = storage.getItem(key)
+	watchDebounced(value, (val) => storage.setItem(key, JSON.stringify(val)), {
+		debounce: 500,
+		deep: true,
+	})
+	return stored ? JSON.parse(stored) : value()
+}
+
+// what frappe-ui puts in `messages` when the server sent no message
+const NO_SENTENCE = 'Internal Server Error'
+
+/**
+ * The message to show the user for a failed request.
+ *
+ * The server's own message comes first. Frappe sends it to every user, but
+ * sends the traceback in `exc` only to a System User. The traceback's exception
+ * line is used only when the server sent no message. Frappe writes the message
+ * as HTML for desk. This app shows it as text, so the markup is removed.
+ */
+export function getErrorMessage(err: any) {
+	const sentence = err.messages?.filter((message: string) => message !== NO_SENTENCE).at(-1)
+	if (sentence) return asText(sentence)
+
+	// the exception line is not always last: DuckDB appends the offending SQL and a caret
+	const lines: string[] = err.exc?.split('\n') ?? []
+	const excLine = lines.filter((line) => /^[\w.]+(Error|Exception): /.test(line)).at(-1)
+	if (!excLine) return err.message || err.toString()
+	const message = excLine.split(': ').slice(1).join(': ')
+	const details = lines.slice(lines.lastIndexOf(excLine) + 1)
+	return [message, ...details].join('\n').trim()
+}
+
+function asText(html: string) {
+	return html
+		.replace(/<[^>]*>/g, '')
+		.replace(/&lt;/g, '<')
+		.replace(/&gt;/g, '>')
+		.replace(/&quot;/g, '"')
+		.replace(/&#39;/g, "'")
+		.replace(/&amp;/g, '&')
+}
+
+export function showErrorToast(err: Error, raise: false): void
+export function showErrorToast(err: Error, raise?: true): never
+export function showErrorToast(err: Error, raise = true) {
+	toast.error(getErrorMessage(err))
+	if (raise) throw err
+}
+
+export function downloadImage(element: HTMLElement, filename: string, scale = 2, options = {}) {
+	return import('html-to-image')
+		.then(({ toPng }) =>
+			toPng(element, {
+				width: element.scrollWidth,
+				height: element.scrollHeight,
+				pixelRatio: scale,
+				backgroundColor: 'white',
+				style: {
+					width: `${element.scrollWidth}px`,
+					height: `${element.scrollHeight}px`,
+					overflow: 'visible',
+				},
+				...options,
+			}),
+		)
+		.then((dataUrl) => {
+			const link = document.createElement('a')
+			link.download = filename
+			link.href = dataUrl
+			link.click()
+		})
+		.catch((err) => showErrorToast(err, false))
+}
+
+/** A cell read as a number, or nothing: null, blank and text are not zero. */
+export function toNumber(value: any): number | null {
+	if (value === null || value === undefined || value === '') return null
+	const number = Number(value)
+	return Number.isNaN(number) ? null : number
+}
+
+// `precision` is left out, not zeroed, when nobody states one: a caller asking
+// for no decimals means no decimals, and `0 || guess` swallowed that.
+export function formatNumber(number: number, precision?: number): string {
+	if (isNaN(number)) return String(number)
+	precision = precision ?? guessPrecision(number)
+	const locale = session.site?.country == 'India' ? 'en-IN' : session.user?.locale
+	return new Intl.NumberFormat(locale || 'en-US', {
+		minimumFractionDigits: precision,
+		maximumFractionDigits: precision,
+	}).format(number)
+}
+
+export type FormatUnits = {
+	// what the stored number must be multiplied by to reach the printed one
+	scale: number
+	prefix: string
+	suffix: string
+}
+
+const NO_UNITS: FormatUnits = { scale: 1, prefix: '', suffix: '' }
+
+// A measure states its unit once, and every reading of it prints that unit the
+// same way. The symbol sits where fmt_money puts it, so Insights and desk agree.
+export function getFormatUnits(format?: DataFormat, code?: string | null): FormatUnits {
+	if (format === 'percent') {
+		return { scale: 100, prefix: '', suffix: '%' }
+	}
+	if (format !== 'currency') return NO_UNITS
+
+	const resolved = code === undefined ? session.site?.currency : code
+	const currency = resolved ? session.site?.currency_symbols?.[resolved] : undefined
+	if (!currency?.symbol) return NO_UNITS
+	return currency.symbol_on_right
+		? { scale: 1, prefix: '', suffix: ` ${currency.symbol}` }
+		: { scale: 1, prefix: `${currency.symbol} `, suffix: '' }
+}
+
+export function guessPrecision(number: number) {
+	if (!number || isNaN(number)) return 0
+	// eg. 1.0 precision = 1, 1.00 precision = 2
+	const str = number.toString()
+	const decimalIndex = str.indexOf('.')
+	if (decimalIndex === -1) return 0
+	return Math.min(str.length - decimalIndex - 1, 2)
+}
+
+export function getShortNumber(number: number, precision = 0) {
+	const locale = session.site?.country == 'India' ? 'en-IN' : session.user?.locale
+	let formatted = new Intl.NumberFormat(locale || 'en-US', {
+		notation: 'compact',
+		maximumFractionDigits: precision,
+	}).format(number)
+
+	if (locale == 'en-IN') {
+		formatted = formatted.replace('T', 'K')
+	}
+	return formatted
+}
+
+export function fuzzySearch(arr: any[], { term, keys }: { term: string; keys: string[] }) {
+	// search for term in all keys of arr items and sort by relevance
+	const lowerCaseTerm = term.toLowerCase()
+	type Result = { item: any; score: number }
+	const results: Result[] = arr.reduce((acc, item) => {
+		const score = keys.reduce((acc, key) => {
+			const value = item[key]
+			if (value) {
+				const match = value.toLowerCase().indexOf(lowerCaseTerm)
+				if (match !== -1) {
+					return acc + match + 1
+				}
+			}
+			return acc
+		}, 0)
+		if (score) {
+			acc.push({ item, score })
+		}
+		return acc
+	}, [])
+	return results.sort((a, b) => a.score - b.score).map((item) => item.item)
+}
+
+export function safeJSONParse(str: string, defaultValue = null) {
+	if (str === null || str === undefined) {
+		return defaultValue
+	}
+
+	if (typeof str !== 'string') {
+		return str
+	}
+
+	try {
+		return JSON.parse(str)
+	} catch (e) {
+		console.groupCollapsed('Error parsing JSON')
+		console.log(str)
+		console.error(e)
+		console.groupEnd()
+		toast.error(__('Error parsing JSON'))
+		return defaultValue
+	}
+}
+
+export function copyToClipboard(text: string | Promise<string>) {
+	if (text instanceof Promise) {
+		// Safari blocks clipboard access if called after an async operation
+		// fix: use call ClipboardItem synchronously but with the text as a promise
+		const blob = text.then((t) => new Blob([t], { type: 'text/plain' }))
+		navigator.clipboard
+			.write([new ClipboardItem({ 'text/plain': blob })])
+			.then(() => showCopyToast(true))
+			.catch(() => showCopyToast(false))
+		return
+	}
+
+	navigator.clipboard
+		.writeText(text)
+		.then(() => showCopyToast(true))
+		.catch(() => showCopyToast(false))
+}
+
+function showCopyToast(success: boolean) {
+	if (success) {
+		toast.success(__('Copied to clipboard'))
+	} else {
+		toast.error(__('Failed to copy to clipboard'))
+	}
+}
+
+export function ellipsis(value: string, length: number) {
+	if (value && value.length > length) {
+		return value.substring(0, length) + '...'
+	}
+	return value
+}
+
+export function flattenOptions(
+	options: DropdownOption[] | GroupedDropdownOption[],
+): DropdownOption[] {
+	if (!options.length) return []
+	return 'group' in options[0]
+		? (options as GroupedDropdownOption[]).map((c) => c.options).flat()
+		: (options as DropdownOption[])
+}
+
+export function groupOptions<T extends DropdownOption>(
+	options: T[],
+	groupBy: keyof T,
+): GroupedDropdownOption[] {
+	return options.reduce((acc, option) => {
+		const group = option[groupBy] as string
+		const index = acc.findIndex((g) => g.group === group)
+		if (index === -1) {
+			acc.push({ group, options: [option] })
+		} else {
+			acc[index].options.push(option)
+		}
+		return acc
+	}, [] as GroupedDropdownOption[])
+}
+
+export function scrub(text: string, spacer = '_') {
+	return text.replace(/ /g, spacer).toLowerCase()
+}
+
+type OptionKey = keyof DropdownOption
+export function toOptions(arr: any[], map: Record<OptionKey, string>) {
+	return arr.map((item) => {
+		Object.keys(map).forEach((key) => {
+			// @ts-ignore
+			item[key] = item[map[key]]
+		})
+		return item
+	})
+}
+
+export function sanitizeColumnName(name: string) {
+	return name
+		? name
+				.trim()
+				.replace(' ', '_')
+				.replace('-', '_')
+				.replace('.', '_')
+				.replace('/', '_')
+				.replace('(', '_')
+				.replace(')', '_')
+				.toLowerCase()
+		: name
+}
+
+export function isDate(data_type: ColumnDataType) {
+	return FIELDTYPES.DATE.includes(data_type)
+}
+
+export function isNumber(data_type: ColumnDataType) {
+	return FIELDTYPES.NUMBER.includes(data_type)
+}
+
+export function isString(data_type: ColumnDataType) {
+	return FIELDTYPES.TEXT.includes(data_type)
+}
+
+export function attachRealtimeListener(event: string, callback: (...args: any[]) => void) {
+	const $socket = inject<Socket>('$socket')!
+	$socket.on(event, callback)
+	onBeforeUnmount(() => {
+		$socket.off(event)
+	})
+}
+
+export function createHeaders(columns: QueryResultColumn[]) {
+	const nestedColumns = columns.filter((column) => column.name.includes('___'))
+	const levels = nestedColumns.length ? nestedColumns[0].name.split('___').length : 1
+
+	const _columns = columns.map((column) => {
+		return {
+			...column,
+			isNested: column.name.includes('___'),
+			// ibis pivots to measure___value1___value2, deepest value last. A
+			// header reads the other way round, the outermost dimension on the
+			// top row and the measure on the bottom, so the parts are reversed.
+			parts: column.name.split('___').reverse(),
+		}
+	})
+
+	const headers = []
+
+	for (let level = 0; level < levels; level++) {
+		const headerRow = []
+
+		for (let column of _columns) {
+			const isNested = column.isNested
+			const isLast = level === levels - 1
+
+			headerRow.push({
+				label: isNested ? column.parts[level] : isLast ? column.name : '',
+				level,
+				isLast,
+				column: column,
+			})
+		}
+
+		headers.push(headerRow)
+	}
+
+	const groupedHeaders = []
+
+	for (let headerRow of headers) {
+		const groupedHeaderRow = []
+
+		let currentHeader = headerRow[0]
+		let currentColspan = 1
+
+		for (let i = 1; i < headerRow.length; i++) {
+			const header = headerRow[i]
+
+			if (header.label === currentHeader.label) {
+				currentColspan++
+			} else {
+				groupedHeaderRow.push({
+					...currentHeader,
+					colspan: currentColspan,
+				})
+				currentHeader = header
+				currentColspan = 1
+			}
+		}
+
+		groupedHeaderRow.push({
+			...currentHeader,
+			colspan: currentColspan,
+		})
+
+		groupedHeaders.push(groupedHeaderRow)
+	}
+
+	// if header rows have items with values like: 2016-10-01, 2016-11-01, 2016-12-01
+	// i.e first day of each month, then we format the values as 'Oct 2016', 'Nov 2016', 'Dec 2016'
+
+	for (let headerRow of groupedHeaders) {
+		const areDates = areValidDates(headerRow.map((header) => header.label))
+		if (!areDates) continue
+
+		const areFirstOfFiscalYear = areFirstDayOfFiscalYear(
+			headerRow.map((header) => header.label),
+		)
+		const areFirstOfYear = areFirstDayOfYear(headerRow.map((header) => header.label))
+		const areFirstOfMonth = areFirstDayOfMonth(headerRow.map((header) => header.label))
+
+		for (let header of headerRow) {
+			if (!isValidDate(header.label)) continue
+
+			if (areFirstOfFiscalYear) {
+				header.label = getFormattedDate(header.label, 'fiscal_year')
+			} else if (areFirstOfYear) {
+				header.label = getFormattedDate(header.label, 'year')
+			} else if (areFirstOfMonth) {
+				header.label = getFormattedDate(header.label, 'month')
+			} else if (areDates) {
+				header.label = getFormattedDate(header.label, 'day')
+			}
+		}
+	}
+
+	return groupedHeaders
+}
+
+function areFirstDayOfFiscalYear(data: string[]) {
+	const fiscalYearStart = session.site?.fiscal_year_start
+	if (!fiscalYearStart) return false
+
+	const start = new Date(fiscalYearStart)
+	const fiscalStartMonth = start.getMonth()
+	const fiscalStartDay = start.getDate()
+
+	// when the fiscal year aligns with the calendar year, defer to year formatting
+	if (fiscalStartMonth === 0 && fiscalStartDay === 1) return false
+
+	const firstDayOfFiscalYear = (date: string) => {
+		const d = new Date(date)
+		return d.getMonth() === fiscalStartMonth && d.getDate() === fiscalStartDay
+	}
+	return data.map(firstDayOfFiscalYear).filter(Boolean).length / data.length >= 0.5
+}
+
+function areFirstDayOfMonth(data: string[]) {
+	const firstDayOfMonth = (date: string) => new Date(date).getDate() === 1
+	return data.map(firstDayOfMonth).filter(Boolean).length / data.length >= 0.5
+}
+
+function areFirstDayOfYear(data: string[]) {
+	const firstDayOfYear = (date: string) =>
+		new Date(date).getMonth() === 0 && new Date(date).getDate() === 1
+	return data.map(firstDayOfYear).filter(Boolean).length / data.length >= 0.5
+}
+
+function areValidDates(data: string[]) {
+	return data.map(isValidDate).filter(Boolean).length / data.length >= 0.5
+}
+
+function isValidDate(value: string) {
+	// almost all dates will have a valid 4 digit year
+	if (!value) return false
+	if (!/\d{4}/.test(value)) return false
+	const date = new Date(value)
+	return !isNaN(date.getTime()) && date.getFullYear() >= 1900 && date.getFullYear() <= 2900
+}
+
+const callCache = new Map<string, any>()
+export function cachedCall(url: string, options?: any): Promise<any> {
+	// a function that makes a fetch call, but also caches the response for the same url & options
+	const key = JSON.stringify({ url, options })
+	if (callCache.has(key)) {
+		return Promise.resolve(callCache.get(key))
+	}
+
+	return call(url, options)
+		.then((response: any) => {
+			callCache.set(key, response)
+			return response
+		})
+		.catch((err: Error) => {
+			callCache.delete(key)
+			throw err
+		})
+}
+
+export function toTitleCase(str: string): string {
+	if (!str) return str
+
+	return str
+		.replace(/&/g, 'and')
+		.toLowerCase()
+		.split(' ')
+		.map((word) => {
+			if (word === 'and') return 'and'
+			return word.charAt(0).toUpperCase() + word.slice(1)
+		})
+		.join(' ')
+		.trim()
+}

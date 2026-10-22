@@ -1,0 +1,93 @@
+@import 'frappe-ui/style.css';
+@import './styles/codemirror.css';
+@import './styles/design-tokens.css';
+
+body {
+	/* Base ink color so any text without an explicit text-ink-* class still
+	   flips with the theme instead of falling back to default black. */
+	@apply text-base text-ink-gray-8;
+}
+
+/* Focus-ring offset gap should match the surface, not Tailwind's default white,
+   so rings with `ring-offset-*` flip with the theme (editable titles, table
+   column headers). Unlayered so it wins over Tailwind's base default. */
+*,
+::before,
+::after {
+	--tw-ring-offset-color: var(--surface-base);
+}
+
+.tnum {
+	font-feature-settings: 'tnum';
+}
+
+/* Contain the app's own z-indexes (sticky headers, CodeMirror tooltips) so they
+   cannot compete with dialogs and popovers, which portal to the body. Without a
+   stacking context here they escape to the root and paint over the portal; with
+   one, body order alone layers app < dialog < popover, so neither needs a
+   z-index. */
+#app {
+	isolation: isolate;
+}
+
+/* Combobox/MultiSelect dropdowns match their trigger width. frappe-ui applies
+   this only to input-mode Combobox; a custom #trigger (button mode) drops it and
+   exposes no prop, so restore it here. min-width only grows the panel, so narrow
+   triggers with wider content are unaffected. data-size excludes Popover content. */
+[data-slot='content'][data-size] {
+	min-width: var(--reka-combobox-trigger-width);
+}
+
+@layer components {
+	/* What a bare `border` renders in this app: a step darker than frappe-ui's
+	   own default. In the components layer: a utility that names a color,
+	   `border-transparent` included, is emitted after it and wins. */
+	.border {
+		border-color: var(--outline-gray-2);
+	}
+
+	/* Works on Firefox */
+	* {
+		scrollbar-width: thin;
+		scrollbar-color: var(--surface-gray-5) var(--surface-gray-2);
+	}
+
+	html {
+		scrollbar-width: auto;
+	}
+
+	/* Works on Chrome, Edge, and Safari */
+	*::-webkit-scrollbar-thumb {
+		background: var(--surface-gray-5);
+		border-radius: 6px;
+	}
+
+	*::-webkit-scrollbar-track,
+	*::-webkit-scrollbar-corner {
+		background: var(--surface-gray-2);
+	}
+
+	*::-webkit-scrollbar {
+		width: 0px;
+		height: 6px;
+	}
+
+	body::-webkit-scrollbar {
+		width: 0px;
+		height: 12px;
+	}
+}
+
+.fade-enter-active,
+.fade-leave-active {
+	transition: opacity 0.1s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+	opacity: 0;
+}
+
+.lucide {
+	stroke-width: 1.5;
+}

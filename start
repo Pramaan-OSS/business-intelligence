@@ -1,0 +1,37 @@
+#!/bin/sh
+set -eu
+umask 077
+cd "$(dirname "$0")"
+mkdir -p .runtime
+compose() { docker compose --env-file .env -f docker/docker-compose.yml "$@"; }
+bootstrap() { docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/workspace" -w /workspace python:3.14-slim python scripts/local-config.py "$@"; }
+bootstrap
+port=$(bootstrap --print-port)
+container=$(compose ps -q app)
+running=false
+if [ -n "$container" ]; then running=$(docker inspect -f '{{.State.Running}}' "$container"); fi
+if [ "$running" != true ]; then
+  attempts=0
+  while ! probe=$(docker run --rm --detach -p "$port:8000" python:3.14-slim python -c 'import time; time.sleep(600)' 2>>.runtime/ports.log); do
+    port=$((port + 1)); attempts=$((attempts + 1))
+    if [ "$attempts" -ge 50 ]; then printf '%s\n' 'No local port is available. Stop an unused service and run ./start again.'; exit 1; fi
+  done
+  docker stop -t 0 "$probe" >/dev/null
+fi
+bootstrap --port "$port"
+if ! compose up --build --detach > .runtime/start.log 2>&1; then
+  printf '%s\n' 'Startup did not complete. See .runtime/start.log and docker compose --env-file .env -f docker/docker-compose.yml logs.'
+  exit 1
+fi
+for service in app web; do
+  attempts=0
+  until docker inspect --format '{{.State.Health.Status}}' "$(compose ps -q "$service")" 2>/dev/null | grep -q '^healthy$'; do
+    attempts=$((attempts + 1))
+    if [ "$attempts" -ge 180 ]; then
+      printf '%s\n' 'Startup did not complete. See .runtime/start.log and the container logs.'
+      exit 1
+    fi
+    sleep 5
+  done
+done
+printf 'Business Intelligence is running at http://localhost:%s. Sign in as Administrator; the password is in .runtime/local-admin-password.\n' "$port"

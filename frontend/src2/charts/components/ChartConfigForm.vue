@@ -1,0 +1,125 @@
+<script setup lang="ts">
+import { computed, inject } from 'vue'
+import useQuery, { Query } from '../../query/query'
+import {
+	BarChartConfig,
+	BubbleChartConfig,
+	DonutChartConfig,
+	FunnelChartConfig,
+	HeatmapChartConfig,
+	LineChartConfig,
+	MapChartConfig,
+	NumberChartConfig,
+	SankeyChartConfig,
+	TableChartConfig,
+} from '../../types/chart.types'
+import { DimensionOption } from '../../types/query.types'
+import { Chart } from '../chart'
+import { chartPreviewKey } from '../chart_preview'
+import BarChartConfigForm from './BarChartConfigForm.vue'
+import DonutChartConfigForm from './DonutChartConfigForm.vue'
+import FunnelChartConfigForm from './FunnelChartConfigForm.vue'
+import HeatmapChartConfigForm from './HeatmapChartConfigForm.vue'
+import LineChartConfigForm from './LineChartConfigForm.vue'
+import MapChartConfigForm from './MapChartConfigForm.vue'
+import NumberChartConfigForm from './NumberChartConfigForm.vue'
+import BubbleChartConfigForm from './BubbleChartConfigForm.vue'
+import SankeyChartConfigForm from './SankeyChartConfigForm.vue'
+import TableChartConfigForm from './TableChartConfigForm.vue'
+
+const props = defineProps<{ chart: Chart }>()
+
+// a saved region mapping re-shapes the rows, so the preview has to run again
+const preview = inject(chartPreviewKey)!
+
+const chartQuery = computed(() => {
+	if (!props.chart.doc.query) return {} as Query
+	return useQuery(props.chart.doc.query)
+})
+
+const dimensions = computed<DimensionOption[]>(() => {
+	if (!chartQuery.value.dimensions) return []
+	return chartQuery.value.dimensions.map((dimension) => ({
+		...dimension,
+		label: dimension.column_name,
+		value: dimension.column_name,
+	}))
+})
+
+const columnOptions = computed(() => chartQuery.value.result?.columnOptions || [])
+const queryResult = computed(() => chartQuery.value.result)
+
+// What the chart actually shows, not what the query returned. A table pivots
+// after the query, so `Revenue___Women` exists here and nowhere else — and a
+// formatting rule must name the column it formats.
+const resultColumnOptions = computed(() => preview.result?.columnOptions || [])
+</script>
+
+<template>
+	<NumberChartConfigForm
+		v-if="props.chart.doc.chart_type == 'Number'"
+		v-model="props.chart.doc.config as NumberChartConfig"
+		:dimensions="dimensions"
+		:column-options="columnOptions"
+	/>
+	<DonutChartConfigForm
+		v-if="props.chart.doc.chart_type == 'Donut'"
+		v-model="props.chart.doc.config as DonutChartConfig"
+		:dimensions="dimensions"
+		:column-options="columnOptions"
+	/>
+	<FunnelChartConfigForm
+		v-if="props.chart.doc.chart_type == 'Funnel'"
+		v-model="props.chart.doc.config as FunnelChartConfig"
+		:dimensions="dimensions"
+		:column-options="columnOptions"
+	/>
+	<TableChartConfigForm
+		v-if="props.chart.doc.chart_type == 'Table'"
+		v-model="props.chart.doc.config as TableChartConfig"
+		:dimensions="dimensions"
+		:column-options="columnOptions"
+		:result-column-options="resultColumnOptions"
+	/>
+	<BarChartConfigForm
+		v-if="props.chart.doc.chart_type == 'Bar' || props.chart.doc.chart_type == 'Row'"
+		v-model="props.chart.doc.config as BarChartConfig"
+		:chart-type="props.chart.doc.chart_type"
+		:dimensions="dimensions"
+		:column-options="columnOptions"
+	/>
+	<LineChartConfigForm
+		v-if="props.chart.doc.chart_type == 'Line'"
+		v-model="props.chart.doc.config as LineChartConfig"
+		:dimensions="dimensions"
+		:column-options="columnOptions"
+	/>
+	<MapChartConfigForm
+		v-if="props.chart.doc.chart_type == 'Map'"
+		v-model="props.chart.doc.config as MapChartConfig"
+		:dimensions="dimensions"
+		:column-options="columnOptions"
+		:chart-name="props.chart.doc.name"
+		:query-name="props.chart.doc.query"
+		:query-result="queryResult"
+		@mappingsSaved="() => preview.load(true)"
+	/>
+	<BubbleChartConfigForm
+		v-if="props.chart.doc.chart_type == 'Bubble'"
+		v-model="props.chart.doc.config as BubbleChartConfig"
+		:dimensions="dimensions"
+		:column-options="columnOptions"
+	/>
+	<SankeyChartConfigForm
+		v-if="props.chart.doc.chart_type == 'Sankey'"
+		v-model="props.chart.doc.config as SankeyChartConfig"
+		:dimensions="dimensions"
+		:column-options="columnOptions"
+	/>
+	<HeatmapChartConfigForm
+		v-if="props.chart.doc.chart_type == 'Heatmap'"
+		v-model="props.chart.doc.config as HeatmapChartConfig"
+		:dimensions="dimensions"
+		:column-options="columnOptions"
+	/>
+</template>

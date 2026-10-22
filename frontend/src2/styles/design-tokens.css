@@ -1,0 +1,145 @@
+@font-face {
+    font-family: 'Fraunces';
+    src: url('./fonts/fraunces-latin-400.woff2') format('woff2');
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+
+/* Unlayered overrides of the shared kit's semantic variables. */
+:root,
+:root[data-theme='light'] {
+    --bi-ground: #ededed;
+    --bi-glass: rgba(255, 255, 255, 0.58);
+    --bi-card: rgba(255, 255, 255, 0.78);
+    --bi-card-edge: rgba(0, 0, 0, 0.07);
+    --bi-line: rgba(0, 0, 0, 0.08);
+    --bi-ink: #111111;
+    --bi-secondary: #454545;
+    --bi-meta: #5f5f5f;
+    --bi-accent: #2b59d1;
+    --bi-on-accent: #ffffff;
+    --bi-sans: 'InterVar', 'Inter', 'Geist', ui-sans-serif, system-ui, sans-serif;
+    --bi-serif: 'Fraunces', 'Untitled Serif', Georgia, 'Times New Roman', serif;
+    --bi-card-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 1px 2px rgba(0, 0, 0, 0.04);
+    --surface-base: var(--bi-ground);
+    --surface-gray-1: var(--bi-glass);
+    --surface-gray-2: rgba(0, 0, 0, 0.035);
+    --surface-gray-3: rgba(0, 0, 0, 0.05);
+    --surface-gray-4: rgba(0, 0, 0, 0.08);
+    --ink-gray-4: var(--bi-meta);
+    --ink-gray-5: var(--bi-meta);
+    --ink-gray-6: var(--bi-secondary);
+    --ink-gray-7: var(--bi-secondary);
+    --ink-gray-8: var(--bi-ink);
+    --ink-gray-9: var(--bi-ink);
+    --outline-gray-1: var(--bi-line);
+    --outline-gray-2: var(--bi-card-edge);
+    --outline-gray-3: var(--bi-line);
+    --ink-blue-5: var(--bi-accent);
+    --ink-blue-6: var(--bi-accent);
+    --surface-blue-5: var(--bi-accent);
+    --surface-blue-6: var(--bi-accent);
+    --radius-4: 12px;
+    --radius-5: 12px;
+    --radius-6: 16px;
+    --radius-7: 16px;
+    --elevation-sm: var(--bi-card-shadow);
+    --elevation-base: var(--bi-card-shadow);
+    --elevation-md: var(--bi-card-shadow);
+    --elevation-lg: var(--bi-card-shadow);
+    --elevation-xl: var(--bi-card-shadow);
+    --elevation-2xl: var(--bi-card-shadow);
+    --focus-outline-default: 0 0 0 2px var(--bi-accent);
+}
+
+:root[data-theme='dark'] {
+    --bi-ground: #0f0f10;
+    --bi-glass: rgba(255, 255, 255, 0.05);
+    --bi-card: rgba(255, 255, 255, 0.08);
+    --bi-card-edge: rgba(255, 255, 255, 0.1);
+    --bi-line: rgba(255, 255, 255, 0.11);
+    --bi-ink: #f4f4f4;
+    --bi-secondary: #c6c6c6;
+    --bi-meta: #9a9a9a;
+    --bi-accent: #6b93f0;
+    --bi-on-accent: #0b1430;
+    --bi-card-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 1px 2px rgba(0, 0, 0, 0.3);
+    --surface-base: var(--bi-ground);
+    --surface-gray-1: var(--bi-glass);
+    --surface-gray-2: rgba(255, 255, 255, 0.03);
+    --surface-gray-3: rgba(255, 255, 255, 0.06);
+    --surface-gray-4: rgba(255, 255, 255, 0.09);
+    --ink-gray-4: var(--bi-meta);
+    --ink-gray-5: var(--bi-meta);
+    --ink-gray-6: var(--bi-secondary);
+    --ink-gray-7: var(--bi-secondary);
+    --ink-gray-8: var(--bi-ink);
+    --ink-gray-9: var(--bi-ink);
+    --outline-gray-1: var(--bi-line);
+    --outline-gray-2: var(--bi-card-edge);
+    --outline-gray-3: var(--bi-line);
+    --ink-blue-5: var(--bi-accent);
+    --ink-blue-6: var(--bi-accent);
+    --surface-blue-5: var(--bi-accent);
+    --surface-blue-6: var(--bi-accent);
+}
+
+body {
+    background: var(--bi-ground);
+    color: var(--bi-ink);
+    font-family: var(--bi-sans);
+}
+
+h1, h2, h3, .text-2xl-medium {
+    font-family: var(--bi-serif);
+    font-weight: 400;
+    letter-spacing: -0.02em;
+}
+
+/* Chart cards, settings panels, and dialogs keep hairline edges. */
+[class~='group/card'], [role='dialog'], .grid-stack-item-content {
+    background: var(--bi-card);
+    border: 1px solid var(--bi-card-edge);
+    border-radius: 16px;
+    box-shadow: var(--bi-card-shadow);
+}
+
+button.bg-surface-gray-10:not(:disabled), a.bg-surface-gray-10 {
+    background: var(--bi-accent);
+    color: var(--bi-on-accent);
+}
+
+:focus-visible {
+    outline: 2px solid var(--bi-accent);
+    outline-offset: 2px;
+}
+
+/* All blue kit controls derive from the same accent. */
+:root, :root[data-theme] {
+    --ink-blue-1: var(--bi-accent);
+    --surface-blue-1: color-mix(in srgb, var(--bi-accent) 5%, transparent);
+    --ink-blue-2: var(--bi-accent);
+    --surface-blue-2: color-mix(in srgb, var(--bi-accent) 10%, transparent);
+    --ink-blue-3: var(--bi-accent);
+    --surface-blue-3: color-mix(in srgb, var(--bi-accent) 15%, transparent);
+    --ink-blue-4: var(--bi-accent);
+    --surface-blue-4: color-mix(in srgb, var(--bi-accent) 20%, transparent);
+    --ink-blue-5: var(--bi-accent);
+    --surface-blue-5: var(--bi-accent);
+    --ink-blue-6: var(--bi-accent);
+    --surface-blue-6: var(--bi-accent);
+    --ink-blue-7: var(--bi-accent);
+    --surface-blue-7: var(--bi-accent);
+    --ink-blue-8: var(--bi-accent);
+    --surface-blue-8: var(--bi-accent);
+    --ink-blue-9: var(--bi-accent);
+    --surface-blue-9: var(--bi-accent);
+    --ink-blue-10: var(--bi-accent);
+    --surface-blue-10: var(--bi-accent);
+    --outline-blue-1: color-mix(in srgb, var(--bi-accent) 16%, transparent);
+    --outline-blue-2: color-mix(in srgb, var(--bi-accent) 32%, transparent);
+    --outline-blue-3: color-mix(in srgb, var(--bi-accent) 48%, transparent);
+    --outline-blue-4: color-mix(in srgb, var(--bi-accent) 64%, transparent);
+    --outline-blue-5: color-mix(in srgb, var(--bi-accent) 80%, transparent);
+}

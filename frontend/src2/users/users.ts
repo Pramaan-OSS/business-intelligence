@@ -1,0 +1,125 @@
+import { call, toast } from 'frappe-ui'
+import { reactive, ref } from 'vue'
+import { showErrorToast } from '../helpers'
+import { __ } from '../translation'
+
+export type User = {
+	name: ''
+	email: ''
+	full_name: ''
+	user_image: ''
+	type: 'Admin' | 'User'
+	enabled: 1 | 0
+	last_active?: ''
+	invitation_status?: 'Pending' | 'Expired'
+}
+const users = ref<User[]>([])
+
+const loading = ref(false)
+async function getUsers(search_term = '') {
+	loading.value = true
+	return call('insights.api.user.get_users', { search_term }).then((res: User[]) => {
+		users.value = res
+		loading.value = false
+		return users.value
+	})
+}
+
+// a search result is a slice of the roster, so it is merged in rather than
+// swapped for it - names already on screen must survive the next keystroke
+const searching = ref(false)
+async function searchUsers(search_term = '') {
+	searching.value = true
+	return call('insights.api.user.get_users', { search_term })
+		.then((res) => {
+			const matches = res as User[]
+			const known = new Set(users.value.map((u) => u.email))
+			users.value = users.value.concat(matches.filter((u) => !known.has(u.email)))
+			return matches
+		})
+		.finally(() => (searching.value = false))
+}
+
+function getUser(email: string) {
+	return users.value.find((user) => user.email === email)
+}
+function getName(email: string) {
+	const user = getUser(email)
+	return user ? user.full_name || email : ''
+}
+function getImage(email: string) {
+	const user = getUser(email)
+	return user ? user.user_image : ''
+}
+
+const sendingInvitation = ref(false)
+function inviteUsers(emails: string[]) {
+	sendingInvitation.value = true
+	return call('insights.api.user.invite_users', { emails: emails.join(',') })
+		.then(() => {
+			getUsers()
+			toast.success(__('Invitation Sent'), {
+				description:
+					emails.length === 1
+						? __(`Invitation sent to {0}`, emails[0])
+						: __(`Invitations sent to {0} users`, String(emails.length)),
+			})
+		})
+		.catch((e: Error) => {
+			showErrorToast(e)
+		})
+		.finally(() => {
+			sendingInvitation.value = false
+		})
+}
+
+const updatingUser = ref(false)
+type UpdateUser = {
+	first_name: string
+	last_name: string
+}
+function updateUser(email: string, data: Partial<UpdateUser>) {
+	updatingUser.value = true
+	return call('insights.api.user.update_user', {
+		email,
+		fields: {
+			first_name: data.first_name,
+			last_name: data.last_name,
+		},
+	})
+		.then(() => {
+			getUsers()
+			toast.success(__('User Updated'), {
+				description: __('User updated successfully'),
+			})
+		})
+		.catch((e: Error) => {
+			showErrorToast(e)
+		})
+		.finally(() => {
+			updatingUser.value = false
+		})
+}
+
+export default function useUserStore() {
+	if (!users.value.length) {
+		getUsers()
+	}
+
+	return reactive({
+		users,
+		loading,
+		getUsers,
+		searchUsers,
+		searching,
+		getUser,
+		getName,
+		getImage,
+
+		updatingUser,
+		updateUser,
+
+		inviteUsers,
+		sendingInvitation,
+	})
+}

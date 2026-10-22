@@ -1,0 +1,617 @@
+import ast
+import functools
+import json
+import re
+import sys
+import traceback
+
+import frappe
+import ibis
+import ibis.expr.types as ir
+from frappe.utils.safe_exec import SERVER_SCRIPT_FILE_PREFIX, NamespaceDict, safe_exec
+from ibis import selectors as s
+from jedi import Script
+
+from insights.exceptions import ExpressionSyntaxError
+
+# An expression describes a query. It does not move data in or out, so the
+# context holds no name that opens a path, a URL or a backend connection.
+# Expressed as a rule rather than a list, so an ibis release that adds
+# `read_avro` or `to_avro` needs no edit here. Attribute names only -
+# `to_inr(amount)` is a plain name and stays available.
+IO_ATTRIBUTE_PREFIXES = ("read_", "to_", "from_")
+IO_ATTRIBUTE_NAMES = frozenset(
+    {
+        "connect",
+        "get_backend",
+        "set_backend",
+        "register",
+    }
+)
+
+# `op()` leads to the backend a relation runs on, and from there to the
+# connection, which runs any statement. These names are the only path from an
+# expression to it.
+BACKEND_ATTRIBUTE_NAMES = frozenset(
+    {"op", "source", "raw_sql", "con", "get_backend", "cache", "release", "visualize"}
+)
+# these run or compile the query. A script may call them; an expression only describes a query
+RUN_ATTRIBUTE_NAMES = frozenset({"execute", "compile", "preview"})
+
+
+def is_io_attribute(name: str) -> bool:
+    return name in IO_ATTRIBUTE_NAMES or name.startswith(IO_ATTRIBUTE_PREFIXES)
+
+
+def is_refused_in_expression(name: str) -> bool:
+    return is_io_attribute(name) or name in BACKEND_ATTRIBUTE_NAMES or name in RUN_ATTRIBUTE_NAMES
+
+
+@functools.cache
+def ibis_attribute_names() -> frozenset[str]:
+    names = set(dir(ibis))
+    classes = [ir.Expr]
+    while classes:
+        cls = classes.pop()
+        names.update(dir(cls))
+        classes.extend(cls.__subclasses__())
+    return frozenset(names)
+
+
+def is_column_attribute(obj, name: str) -> bool:
+    """Whether `obj.name` reads a column of the table `obj`.
+
+    A name that ibis defines on any expression is never one: on the table it is
+    the method, and `safe_eval` checks no attribute at run time, so the same name
+    on a column would be reachable too.
+    """
+    return isinstance(obj, ir.Table) and name in obj.columns and name not in ibis_attribute_names()
+
+
+def assert_expression_has_no_io(expression: str, context: dict | None = None) -> None:
+    """Refuse an expression that names an I/O, backend or run attribute.
+
+    Checked in the source rather than at evaluation: RestrictedPython compiles
+    `a.b` to a guard call passing the literal `b` and leaves no `getattr`, so an
+    attribute name is always spelled out here. An I/O name that is a column of a
+    table in `context` passes.
+    """
+    tables = None
+    for name in attributes_of(expression):
+        if is_refused_in_expression(name):
+            if tables is None:
+                tables = {key: value for key, value in (context or {}).items() if isinstance(value, ir.Table)}
+            if is_io_attribute(name) and any(is_column_attribute(t, name) for t in tables.values()):
+                continue
+            message = f"'{name}' is not available in an expression"
+            if holder := next((key for key, table in tables.items() if name in table.columns), None):
+                message += f". Read the column as {holder}['{name}']"
+            frappe.throw(message, frappe.PermissionError)
+
+
+def runs_sql(expression: str) -> bool:
+    """Whether an expression calls `Table.sql`, which only trusted code may."""
+    return "sql" in attributes_of(expression)
+
+
+def attributes_of(expression: str) -> set[str]:
+    try:
+        tree = ast.parse(expression)
+    except SyntaxError:
+        # the caller reports syntax errors with a line and a column
+        return set()
+
+    return {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+
+
+def names_read(expression: str) -> set[str]:
+    """The names and the attribute names an expression reads."""
+    try:
+        tree = ast.parse(expression)
+    except SyntaxError:
+        return set()
+
+    return {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)} | attributes_of(expression)
+
+
+def called_names(expression: str) -> set[str]:
+    """The plain names an expression calls, such as `sum` in `sum(amount)`."""
+    try:
+        tree = ast.parse(expression)
+    except SyntaxError:
+        return set()
+
+    return {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+
+
+def item_reads(expression: str) -> set[tuple[str, str]]:
+    """The `name['column']` reads in an expression, as `(name, column)`."""
+    try:
+        tree = ast.parse(expression)
+    except SyntaxError:
+        return set()
+
+    return {
+        (node.value.id, node.slice.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Subscript)
+        and isinstance(node.value, ast.Name)
+        and isinstance(node.slice, ast.Constant)
+        and isinstance(node.slice.value, str)
+    }
+
+
+def get_functions():
+    import insights.insights.doctype.insights_data_source_v3.ibis.functions as functions
+
+    context = frappe._dict()
+    exclude_keys = [
+        "frappe",
+        "ibis",
+        "ir",
+        "math",
+        "ops",
+        "pd",
+        "s",
+    ]
+    for key in dir(functions):
+        if not key.startswith("_") and key not in exclude_keys:
+            context[key] = getattr(functions, key)
+
+    selectors = frappe._dict()
+    for key in get_whitelisted_selectors():
+        selectors[key] = getattr(s, key)
+
+    context["s"] = selectors
+    context["selectors"] = selectors
+
+    allowed_ibis_attributes = (
+        "array",
+        "asc",
+        "cases",
+        "coalesce",
+        "cross_join",
+        "cume_dist",
+        "cumulative_window",
+        "date",
+        "dense_rank",
+        "desc",
+        "difference",
+        "dtype",
+        "following",
+        "greatest",
+        "ifelse",
+        "infer_dtype",
+        "infer_schema",
+        "intersect",
+        "interval",
+        "join",
+        "least",
+        "literal",
+        "map",
+        "now",
+        "ntile",
+        "null",
+        "and_",
+        "or_",
+        "param",
+        "percent_rank",
+        "pi",
+        "preceding",
+        "random",
+        "range",
+        "range_window",
+        "rank",
+        "row_number",
+        "rows_window",
+        "schema",
+        "struct",
+        "time",
+        "timestamp",
+        "today",
+        "trailing_range_window",
+        "trailing_window",
+        "union",
+        "uuid",
+        "watermark",
+        "window",
+    )
+    context.ibis = NamespaceDict()
+    for attr in allowed_ibis_attributes:
+        if is_io_attribute(attr):
+            raise ValueError(f"'{attr}' is an I/O function and does not belong in an expression")
+        context.ibis[attr] = getattr(ibis, attr)
+
+    return context
+
+
+def get_whitelisted_selectors():
+    # all the selectors that are decorated with @public
+    # are added to __all__ in the selectors module
+    # check: ibis.selectors.py & public.py
+    try:
+        whitelisted_selectors = s.__dict__["__all__"]
+    except KeyError:
+        whitelisted_selectors = []
+    return whitelisted_selectors
+
+
+@frappe.whitelist()
+def get_function_list():
+    return [key for key in get_functions() if not key.startswith("_")]
+
+
+@frappe.whitelist()
+def get_code_completions(code: str, column_options: str | None = None):
+    import_statement = """from insights.insights.doctype.insights_data_source_v3.ibis.functions import *\nfrom ibis import selectors as s"""
+    code = f"{import_statement}\n\n{code}"
+
+    cursor_pos = code.find("|")
+    line_pos = code.count("\n", 0, cursor_pos)
+    column_pos = cursor_pos - code.rfind("\n", 0, cursor_pos) - 1
+    code = code.replace("|", "")
+
+    column_types = {}
+    if column_options:
+        try:
+            columns = json.loads(column_options)
+            column_types = {
+                col.get("value"): col.get("data_type", "Unknown") for col in columns if col.get("value")
+            }
+        except (json.JSONDecodeError, TypeError):
+            pass  # nosemgrep - completions work without column types
+
+    current_function = None
+
+    script = Script(code)
+    signature_items = script.get_signatures(line_pos + 1, column_pos)
+    for sig in signature_items:
+        description = sig.docstring()
+        # check if description is empty or only contains a single line
+        if not description or "\n" not in description:
+            current_function = {"name": sig.name}
+            continue
+
+        # remove the standard definition from the description, i.e first line
+        description = description.split("\n", 1)[1].strip()
+
+        # use custom definition, if "def " is present in the docstring
+        definition = ""
+        if "def " in description:
+            definition = description.split("\n", 1)[0].strip()
+            description = description.replace(definition, "").strip()
+            definition = definition.replace("def ", "")
+
+        current_function = {
+            "name": sig.name,
+            "definition": definition,
+            "description": description,
+            "params": [{"name": param.name, "description": param.description} for param in sig.params],
+        }
+        if sig.index is not None:
+            current_param = sig.params[sig.index]
+            current_function["current_param"] = current_param.name
+            current_function["current_param_description"] = current_param.description
+
+            # add column type if the current parameter is a column
+            if current_param.name in column_types:
+                current_function["current_param_type"] = column_types[current_param.name]
+
+    return {
+        "current_function": current_function,
+        "column_types": column_types,
+    }
+
+
+@frappe.whitelist()
+def get_function_description(funcName: str):
+    functions_dict = get_functions()
+    func_obj = functions_dict.get(funcName)
+
+    if not func_obj:
+        return None
+
+    docstring = getattr(func_obj, "__doc__", "") or ""
+
+    if "def " in docstring:
+        lines = docstring.split("\n", 1)
+        definition = lines[0].replace("def ", "").strip()
+        description = lines[1].strip() if len(lines) > 1 else ""
+
+    return {"name": funcName, "definition": definition, "description": description}
+
+
+def parse_column_metadata(column_options: str):
+    columns = frappe.parse_json(column_options) or []
+    meta = [col for col in columns if col.get("value")]
+    return meta
+
+
+def create_error(line: int, column: int, message: str, hint: str | None = None):
+    error = {"line": line, "column": column, "message": message}
+    if hint:
+        error["hint"] = hint
+    return error
+
+
+def get_ibis_dtype(columns: list[dict]):
+    type_mapping = {
+        "String": "string",
+        "Integer": "int64",
+        "Decimal": "float64",
+        "Date": "date",
+        "Datetime": "timestamp",
+        "Time": "time",
+        "Text": "string",
+        "JSON": "json",
+        "Array": "array<json>",
+        "Auto": "",
+    }
+    return {
+        col.get("value"): type_mapping.get(col.get("description"))
+        for col in columns
+        if col.get("value") and col.get("description")
+    }
+
+
+def find_similar_names(name: str, names: set[str]):
+    name_lower = name.lower()
+    return [c for c in names if name_lower in c.lower() or c.lower() in name_lower]
+
+
+def validate_syntax(expression: str):
+    try:
+        ast.parse(expression)
+        return {"is_valid": True, "errors": []}
+    except SyntaxError as e:
+        error = create_error(line=e.lineno or 1, column=e.offset or 0, message=f"Syntax error: {e.msg}")
+        return {"is_valid": False, "errors": [error]}
+
+
+def is_function(node, tree):
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            if child == node:
+                return isinstance(parent, ast.Call) and parent.func == node
+    return False
+
+
+def validate_function_name(node, available_functions: set[str]):
+    func_name = node.func.id
+    if func_name in available_functions:
+        return None
+
+    suggestions = find_similar_names(func_name, available_functions)
+    suggestion_text = f"Did you mean: {', '.join(suggestions[:2])}?" if suggestions else ""
+
+    return create_error(
+        line=node.lineno,
+        column=node.col_offset,
+        message=f"Unknown function '{func_name}'. {suggestion_text}".strip(),
+    )
+
+
+def validate_variable_name(node, tree, available_functions: set[str], available_columns: set[str]):
+    var_name = node.id
+
+    if var_name in available_functions or var_name in available_columns:
+        return None
+
+    # pass if the variable is being assigned (LHS)
+    # perf: this is faster and more accurate than looping
+    # ctx is Store if the container is an assignment target
+    if isinstance(node.ctx, ast.Store):
+        return None
+
+    if is_function(node, tree):
+        return None
+
+    suggestions = find_similar_names(var_name, available_columns)
+    suggestion_text = f"Did you mean: {', '.join(suggestions[:2])}?" if suggestions else ""
+
+    return create_error(
+        line=node.lineno,
+        column=node.col_offset,
+        message=f"Column '{var_name}' not found. {suggestion_text}".strip(),
+    )
+
+
+def validate_names(tree, columns: list[dict]):
+    functions = get_functions()
+    available_functions = set(functions.keys())
+    available_columns = {col.get("value") for col in columns} | table_names(None).keys()
+
+    # treat locally assigned variables as valid names so that reusing them
+    assigned_vars = {
+        node.id for node in ast.walk(tree) if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
+    }
+    available_columns = available_columns | assigned_vars
+
+    errors = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            error = validate_function_name(node, available_functions)
+            if error:
+                errors.append(error)
+
+        if isinstance(node, ast.Name):
+            error = validate_variable_name(node, tree, available_functions, available_columns)
+            if error:
+                errors.append(error)
+
+    return {"is_valid": len(errors) == 0, "errors": errors}
+
+
+def table_names(query, right=None) -> dict:
+    """The tables an expression reads by name: the query being built as `q`, and
+    for a join also as `t1`, beside the join's other table as `t2`."""
+    if right is None:
+        return {"q": query}
+    return {"q": query, "t1": query, "t2": right}
+
+
+def expression_context(expression: str, query, functions: dict, right=None) -> dict:
+    """The names an expression reads: its tables, the columns of `query` and `functions`.
+
+    A column named like a function, such as `day`, is the column where the
+    expression reads it as a value and the function where it calls it. A
+    namespace, such as `ibis`, is read through its attributes as a function is
+    called.
+    """
+    # by item: a table's method outranks its column of the same name on attribute access
+    columns = {col: query[col] for col in query.columns}
+    # a table outranks a column of its name, so `q['q']` always reads the column
+    context = {**columns, **functions, **table_names(query, right)}
+    shared = columns.keys() & functions.keys()
+    if not shared:
+        return context
+
+    tree = ast.parse(expression)
+    called = {id(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
+    namespaces = {name for name in shared if not callable(functions[name])}
+    called |= {
+        id(node.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id in namespaces
+    }
+    calls, values = set(), set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in shared:
+            (calls if id(node) in called else values).add(node.id)
+
+    if both := sorted(calls & values):
+        raise ExpressionSyntaxError(
+            f"'{both[0]}' is a column and a function, and this expression uses it as both. "
+            f"Write the column as q['{both[0]}']"
+        )
+    for name in values:
+        context[name] = columns[name]
+    return context
+
+
+def eval_script(table, expression: str):
+    return expression_context(expression, table, get_functions())
+
+
+# Functions that are not supported by certain column types like `DateColumn.sum()`
+def handle_attribute_error(error: AttributeError, line: int = 1):
+    obj = getattr(error, "obj", None)
+    attr_name = getattr(error, "name", None)
+    error_msg = str(error)
+
+    if "'NoneType' object has no attribute" in error_msg:
+        message = "Type error: count() missing 1 required positional argument: 'column'"
+        return create_error(line=line, column=0, message=message)
+
+    if obj is None or attr_name is None:
+        return create_error(line=line, column=0, message=f"Type error: {error_msg}")
+
+    if isinstance(obj, ir.Table):
+        return create_error(line=line, column=0, message=f"Column '{attr_name}' not found.")
+
+    message = f"Type error: {error_msg}"
+    hint = None
+
+    if isinstance(obj, ir.Expr):
+        dtype = obj.type()
+
+        # Check if this method exists on a COLUMN of this type
+        try:
+            mock_table = ibis.table({"mock": dtype}, name="validation_mock")
+            mock_col = mock_table["mock"]
+            has_method_on_col = hasattr(mock_col, attr_name)
+        except Exception:
+            has_method_on_col = False
+
+        if isinstance(obj, ir.Scalar):
+            if has_method_on_col:
+                message = f"Type error: Cannot call aggregation '{attr_name}()' on a scalar value."
+                hint = f"Hint: '{attr_name}' expects a column but you are applying it to a single value "
+            else:
+                message = f"Type error: '{dtype}' data does not support '{attr_name}()'."
+
+        elif isinstance(obj, ir.Column):
+            message = f"Type error: '{dtype}' columns do not support '{attr_name}()'."
+
+    return create_error(line=line, column=0, message=message, hint=hint)
+
+
+def validate_types(expression: str, columns: list[dict]):
+    schema = get_ibis_dtype(columns)
+    validation_table = ibis.table(schema, name="validation_table")
+    # the run's source check, which lets through a column named like an I/O method
+    assert_expression_has_no_io(expression, table_names(validation_table))
+    if not schema:
+        return {"is_valid": True, "errors": []}
+
+    try:
+        from insights.insights.doctype.insights_data_source_v3.sandbox import expression_globals
+
+        eval_context = eval_script(validation_table, expression)
+        safe_exec(expression, {**expression_globals(), **eval_context})  # nosemgrep
+        return {"is_valid": True, "errors": []}
+
+    except ExpressionSyntaxError as e:
+        return {"is_valid": False, "errors": [create_error(1, 0, str(e))]}
+
+    except (AttributeError, TypeError) as e:
+        _, _, tb = sys.exc_info()
+        line = get_error_line(tb)
+        error_msg = str(e)
+
+        if isinstance(e, AttributeError):
+            error = handle_attribute_error(e, line)
+            return {"is_valid": False, "errors": [error]}
+
+        # for <function count at 0x...>
+        if "Unable to infer datatype" in error_msg and "<function" in error_msg:
+            match = re.search(r"<function (\w+)", error_msg)
+            func_name = match.group(1) if match else "unknown"
+
+            msg = f"Type error: You are trying to do math with the function '{func_name}' itself."
+            hint = f"Hint: Did you forget parentheses? Try '{func_name}()' instead of '{func_name}'."
+
+            return {"is_valid": False, "errors": [create_error(line, 0, msg, hint=hint)]}
+
+        return {"is_valid": False, "errors": [create_error(line, 0, f"Type error: {error_msg}")]}
+
+    except Exception as e:
+        _, _, tb = sys.exc_info()
+        line = get_error_line(tb)
+        frappe.log_error(f"Unexpected validation error: {e!s}")
+        return {"is_valid": False, "errors": [create_error(line, 0, f"Error: {e!s}")]}
+
+
+def get_error_line(tb) -> int:
+    if tb:
+        for frame in traceback.extract_tb(tb):
+            if frame.filename == "<string>" or frame.filename.startswith(SERVER_SCRIPT_FILE_PREFIX):
+                return frame.lineno
+    return 1
+
+
+@frappe.whitelist()
+def validate_expression(expression: str, column_options: str):
+    """Main function to validate expression/syntax"""
+
+    if not expression.strip():
+        return {"is_valid": True, "errors": []}
+
+    columns = parse_column_metadata(column_options)
+    syntax_result = validate_syntax(expression)
+    if not syntax_result["is_valid"]:
+        return syntax_result
+
+    tree = ast.parse(expression)
+    name_result = validate_names(tree, columns)
+    if not name_result["is_valid"]:
+        return name_result
+
+    type_result = validate_types(expression, columns)
+    return type_result

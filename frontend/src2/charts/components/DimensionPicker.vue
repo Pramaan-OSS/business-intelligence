@@ -1,0 +1,165 @@
+<script setup lang="ts">
+import { ChevronDown, Settings, XIcon } from 'lucide-vue-next'
+import { computed, watchEffect } from 'vue'
+import InlineFormControlLabel from '../../components/InlineFormControlLabel.vue'
+import LazyTextInput from '../../components/LazyTextInput.vue'
+import { isDate } from '../../helpers'
+import { COLUMN_TYPES, getDefaultGranularity, getGranularityOptions } from '../../helpers/constants'
+import { asDimension } from '../../helpers/typed_input'
+import { Dimension, DimensionOption } from '../../types/query.types'
+
+const emit = defineEmits({ remove: () => true })
+const props = withDefaults(
+	defineProps<{
+		label?: string
+		options: DimensionOption[]
+		/**
+		 * Off for a picker whose chart groups by something else. A number card
+		 * groups by its Period, so a grain here would be a second group-by that
+		 * the card silently drops.
+		 */
+		enableGranularity?: boolean
+	}>(),
+	{ enableGranularity: true },
+)
+
+const dimension = defineModel<Dimension>({
+	required: true,
+	default: () => {
+		return {
+			column_name: '',
+			data_type: 'String',
+			dimension_name: '',
+		}
+	},
+})
+
+if (!dimension.value.dimension_name && dimension.value.column_name) {
+	dimension.value.dimension_name = dimension.value.column_name
+}
+
+const granularityOptions = computed(() => getGranularityOptions(dimension.value.data_type))
+
+watchEffect(() => {
+	const allowedGranularities = new Set(
+		props.enableGranularity ? granularityOptions.value.map((option) => option.value) : [],
+	)
+
+	if (!allowedGranularities.size) {
+		// deleted, not set to `undefined`: a config is stored as JSON, so a key
+		// with no value is a key the next load will not have
+		delete dimension.value.granularity
+		return
+	}
+
+	if (!dimension.value.granularity || !allowedGranularities.has(dimension.value.granularity)) {
+		dimension.value.granularity = getDefaultGranularity(dimension.value.data_type)
+	}
+})
+
+function selectDimension(option?: DimensionOption) {
+	if (!option || !option.column_name) {
+		dimension.value = {
+			column_name: '',
+			data_type: 'String',
+			dimension_name: '',
+		}
+		return
+	}
+	dimension.value = asDimension(option)
+}
+</script>
+
+<template>
+	<div class="flex min-w-0 items-end gap-1">
+		<div class="min-w-0 flex-1">
+			<Combobox
+				:placeholder="__('Select a column')"
+				:options="props.options"
+				:modelValue="dimension.column_name"
+				@update:selectedOption="selectDimension"
+			>
+				<template #trigger>
+					<div class="flex w-full flex-col gap-1.5">
+						<label v-if="props.label" class="block text-xs text-ink-gray-5">
+							{{ props.label }}
+						</label>
+						<Button class="w-full !justify-start">
+							<span
+								class="truncate"
+								:class="
+									dimension.column_name ? 'text-ink-gray-8' : 'text-ink-gray-4'
+								"
+							>
+								{{ dimension.dimension_name || __('Select a column') }}
+							</span>
+							<template #suffix>
+								<ChevronDown
+									class="ml-auto h-4 w-4 text-ink-gray-6"
+									stroke-width="1.5"
+								/>
+							</template>
+						</Button>
+					</div>
+				</template>
+			</Combobox>
+		</div>
+		<Popover v-if="dimension.column_name" side="bottom" align="end">
+			<template #trigger>
+				<Button>
+					<template #icon>
+						<Settings class="h-4 w-4 text-ink-gray-6" stroke-width="1.5" />
+					</template>
+				</Button>
+			</template>
+			<template #default>
+				<div class="flex w-[14rem] flex-col gap-2 p-2">
+					<InlineFormControlLabel :label="__('Label')">
+						<LazyTextInput
+							:placeholder="__('Label')"
+							v-model="dimension.dimension_name"
+						/>
+					</InlineFormControlLabel>
+
+					<InlineFormControlLabel :label="__('Type')">
+						<FormControl
+							type="select"
+							v-model="dimension.data_type"
+							:options="COLUMN_TYPES"
+						/>
+					</InlineFormControlLabel>
+
+					<InlineFormControlLabel
+						v-if="props.enableGranularity && isDate(dimension.data_type)"
+						:label="__('Granularity')"
+					>
+						<FormControl
+							type="select"
+							v-model="dimension.granularity"
+							:options="granularityOptions"
+						/>
+					</InlineFormControlLabel>
+
+					<slot name="config-fields" />
+
+					<div class="flex gap-1">
+						<Button
+							class="w-full"
+							variant="outline"
+							theme="red"
+							iconLeft="lucide-x"
+							@click="emit('remove')"
+						>
+							Remove
+						</Button>
+					</div>
+				</div>
+			</template>
+		</Popover>
+		<Button v-else @click="emit('remove')">
+			<template #icon>
+				<XIcon class="h-4 w-4 text-ink-gray-6" stroke-width="1.5" />
+			</template>
+		</Button>
+	</div>
+</template>

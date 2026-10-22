@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-surface-gray-2">
+	<head>
+		<meta charset="UTF-8" />
+		<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Business Intelligence</title>
+		<script>
+			// Apply the saved theme before first paint to avoid a flash; useTheme()
+			// in main.ts re-affirms this. Keep the 'theme' key/default in sync.
+			try {
+				var t = localStorage.getItem('theme') || 'light'
+				var resolved =
+					t === 'system'
+						? window.matchMedia('(prefers-color-scheme: dark)').matches
+							? 'dark'
+							: 'light'
+						: t
+				document.documentElement.setAttribute('data-theme', resolved)
+			} catch (e) {}
+		</script>
+	</head>
+	<body class="h-full">
+		<div id="app" class="h-full"></div>
+		<div id="modals"></div>
+		<div id="popovers"></div>
+		<script type="module" src="/src2/main.ts"></script>
+	</body>
+</html>

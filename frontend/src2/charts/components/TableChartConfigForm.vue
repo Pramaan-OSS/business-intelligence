@@ -1,0 +1,333 @@
+<script setup lang="ts">
+import AddSlotButton from './AddSlotButton.vue'
+import { Badge, Button } from 'frappe-ui'
+import { Plus, X } from 'lucide-vue-next'
+import { computed, ref } from 'vue'
+import DraggableList from '../../components/DraggableList.vue'
+import NumberInput from '../../components/NumberInput.vue'
+import InlineFormControlLabel from '../../components/InlineFormControlLabel.vue'
+import { FIELDTYPES } from '../../helpers/constants'
+import ConditonalFormattingDialog from '../../query/components/ConditonalFormattingDialog.vue'
+import DataTypeIcon from '../../query/components/DataTypeIcon.vue'
+import { FormatGroupArgs, FormattingMode } from '../../query/components/formatting_utils'
+import { TableChartConfig } from '../../types/chart.types'
+import { ColumnOption, DimensionDataType, DimensionOption } from '../../types/query.types'
+import CollapsibleSection from './CollapsibleSection.vue'
+import DimensionPicker from './DimensionPicker.vue'
+import MeasurePicker from './MeasurePicker.vue'
+import NumberFormatFields from './NumberFormatFields.vue'
+import NumberFormatSection from './NumberFormatSection.vue'
+const props = defineProps<{
+	formatGroup?: FormatGroupArgs
+	dimensions: DimensionOption[]
+	columnOptions: ColumnOption[]
+	/** The columns the chart shows. A pivot's columns exist only here. */
+	resultColumnOptions?: ColumnOption[]
+}>()
+
+const emit = defineEmits({ select: (args: FormatGroupArgs) => true })
+
+const config = defineModel<TableChartConfig>({
+	required: true,
+	default: () => ({
+		rows: [],
+		columns: [],
+		values: [],
+		enable_color_scale: false,
+	}),
+})
+
+const showFormatSelectorDialog = ref(false)
+const editingRuleIndex = ref<number | null>(null)
+const editingRule = ref<FormattingMode | null>(null)
+
+// a pivot aggregates on its own path and ignores a measure's format
+const isPivoted = computed(() => config.value.columns?.some((c) => c?.column_name))
+
+const measuresAsDimensions = computed<DimensionOption[]>(() =>
+	props.columnOptions
+		.filter((o) => FIELDTYPES.NUMBER.includes(o.data_type))
+		.map((o) => ({
+			column_name: o.value,
+			data_type: o.data_type as DimensionDataType,
+			dimension_name: o.label,
+			label: o.label,
+			value: o.value,
+		})),
+)
+
+const dimensions = computed(() => [...props.dimensions, ...measuresAsDimensions.value])
+
+function toColumnOption(item: any, label: string, value: string, dataType: string) {
+	return {
+		query: '',
+		label: item[label],
+		data_type: item[dataType],
+		value: item[value],
+		description: item[dataType],
+	}
+}
+
+const measuresAndDimensions = computed(() => {
+	const measures = config.value.values
+		.filter((m) => m?.measure_name)
+		.map((m) => toColumnOption(m, 'measure_name', 'measure_name', 'data_type'))
+
+	const dimensions = config.value.columns
+		.filter((column) => column?.column_name)
+		.map((column) => toColumnOption(column, 'column_name', 'column_name', 'data_type'))
+
+	const rows = config.value.rows
+		.filter((row) => row?.dimension_name)
+		.map((row) => toColumnOption(row, 'dimension_name', 'dimension_name', 'data_type'))
+
+	return [...measures, ...dimensions, ...rows]
+})
+
+// A rule names a column the table rendered, so the rendered columns are the list. The
+// configured measures and dimensions stand in until the chart has run once,
+// which is also the whole list when the table does not pivot.
+const colOptions = computed<ColumnOption[]>(() =>
+	props.resultColumnOptions?.length
+		? props.resultColumnOptions
+		: (measuresAndDimensions.value as ColumnOption[]),
+)
+
+function editRule(index: number) {
+	const ruleToEditValue = config.value.conditional_formatting?.formats[index]
+
+	if (ruleToEditValue) {
+		editingRule.value = ruleToEditValue as FormattingMode
+		editingRuleIndex.value = index
+		showFormatSelectorDialog.value = true
+	}
+}
+
+function addNewRule() {
+	editingRuleIndex.value = null
+	editingRule.value = null
+	showFormatSelectorDialog.value = true
+}
+
+function handleFormatSelect(formatGroup: FormatGroupArgs) {
+	const newRule = formatGroup.formats[0]
+	if (newRule && newRule.column?.column_name) {
+		if (!config.value.conditional_formatting) {
+			config.value.conditional_formatting = { formats: [], columns: [] }
+		}
+		const editIndex = editingRuleIndex.value
+		if (editIndex !== null) {
+			config.value.conditional_formatting.formats[editIndex] = newRule
+		} else {
+			//add new rule
+			config.value.conditional_formatting.formats.push(newRule)
+		}
+		editingRuleIndex.value = null
+		editingRule.value = null
+	}
+}
+
+function getColumnType(column_name: string) {
+	const col = colOptions.value.find((col) => col.value === column_name)
+	if (!col) {
+		return 'String'
+	}
+	return col.data_type
+}
+
+function toggleStickyColumn(column_name: string, is_sticky: boolean) {
+	if (is_sticky) {
+		if (!config.value.sticky_columns) {
+			config.value.sticky_columns = []
+		}
+		if (!config.value.sticky_columns.includes(column_name)) {
+			config.value.sticky_columns.push(column_name)
+		}
+	} else {
+		config.value.sticky_columns = config.value.sticky_columns?.filter((c) => c !== column_name)
+	}
+}
+
+function updateColumnWidth(column_name: string, width: number | undefined) {
+	if (!config.value.column_widths) {
+		config.value.column_widths = {}
+	}
+	if (width === undefined) {
+		delete config.value.column_widths[column_name]
+	} else {
+		config.value.column_widths[column_name] = width
+	}
+}
+
+function updateTextWrap(column_name: string, wrap: boolean | undefined) {
+	if (!config.value.text_wrap) {
+		config.value.text_wrap = {}
+	}
+	if (!wrap) {
+		delete config.value.text_wrap[column_name]
+	} else {
+		config.value.text_wrap[column_name] = true
+	}
+}
+</script>
+
+<template>
+	<CollapsibleSection :title="__('Rows')">
+		<div>
+			<DraggableList v-model:items="config.rows" group="rows">
+				<template #item="{ item, index }">
+					<DimensionPicker
+						:options="dimensions"
+						:model-value="item"
+						@update:model-value="Object.assign(item, $event || {})"
+						@remove="config.rows.splice(index, 1)"
+					>
+						<template #config-fields>
+							<InlineFormControlLabel :label="__('Width')" control-width="4.5rem">
+								<NumberInput
+									:modelValue="config.column_widths?.[item.dimension_name]"
+									@update:modelValue="
+										updateColumnWidth(item.dimension_name, $event)
+									"
+									:placeholder="__('auto')"
+									min="100"
+									step="10"
+								/>
+							</InlineFormControlLabel>
+							<Toggle
+								:label="__('Wrap text')"
+								:modelValue="config.text_wrap?.[item.dimension_name]"
+								@update:modelValue="updateTextWrap(item.dimension_name, $event)"
+							/>
+							<Toggle
+								:label="__('Pin column')"
+								:modelValue="config.sticky_columns?.includes(item.dimension_name)"
+								@update:modelValue="toggleStickyColumn(item.dimension_name, $event)"
+							/>
+						</template>
+					</DimensionPicker>
+				</template>
+			</DraggableList>
+			<AddSlotButton :label="__('Add column')" @click="config.rows.push({} as any)" />
+		</div>
+	</CollapsibleSection>
+
+	<CollapsibleSection :title="__('Columns')">
+		<div class="flex flex-col gap-3">
+			<div>
+				<DraggableList v-model:items="config.columns" group="columns">
+					<template #item="{ item, index }">
+						<DimensionPicker
+							:options="props.dimensions"
+							:model-value="item"
+							@update:model-value="Object.assign(item, $event || {})"
+							@remove="config.columns.splice(index, 1)"
+						/>
+					</template>
+				</DraggableList>
+				<AddSlotButton :label="__('Add column')" @click="config.columns.push({} as any)" />
+			</div>
+
+			<InlineFormControlLabel
+				v-if="config.columns.length"
+				:label="__('Max values')"
+				control-width="4rem"
+			>
+				<NumberInput
+					placeholder="10"
+					:modelValue="config.max_column_values"
+					@update:modelValue="config.max_column_values = $event"
+				/>
+			</InlineFormControlLabel>
+		</div>
+	</CollapsibleSection>
+
+	<CollapsibleSection :title="__('Values')">
+		<div class="flex flex-col gap-3">
+			<div>
+				<DraggableList v-model:items="config.values" group="values">
+					<template #item="{ item, index }">
+						<MeasurePicker
+							:model-value="item"
+							:column-options="props.columnOptions"
+							:enable-format="!isPivoted"
+							@update:model-value="Object.assign(item, $event || {})"
+							@remove="config.values.splice(index, 1)"
+						>
+							<template #config-fields>
+								<NumberFormatFields
+									:config="config"
+									:measure-name="item.measure_name"
+								/>
+							</template>
+						</MeasurePicker>
+					</template>
+				</DraggableList>
+				<AddSlotButton :label="__('Add column')" @click="config.values.push({} as any)" />
+			</div>
+			<Toggle :label="__('Row totals')" v-model="config.show_row_totals" />
+			<Toggle :label="__('Column totals')" v-model="config.show_column_totals" />
+			<Toggle
+				v-if="config.values.length === 1"
+				:label="__('Color scale')"
+				v-model="config.enable_color_scale"
+			/>
+		</div>
+	</CollapsibleSection>
+	<CollapsibleSection :title="__('Formatting Rules')" collapsed>
+		<template #title-suffix v-if="config.conditional_formatting?.formats.length">
+			<Badge theme="orange">
+				<span class="tnum"> {{ config.conditional_formatting.formats.length }}</span>
+			</Badge>
+		</template>
+		<div class="flex flex-col gap-2">
+			<div v-if="config.conditional_formatting?.formats.length" class="flex flex-col gap-1">
+				<div
+					v-for="(rule, idx) in config.conditional_formatting?.formats"
+					:key="idx"
+					class="flex rounded-4"
+				>
+					<div class="min-w-0 flex-1">
+						<Button
+							class="w-full !justify-start rounded-r-none [&>span]:truncate"
+							@click="editRule(idx)"
+						>
+							<template #prefix>
+								<DataTypeIcon
+									:column-type="getColumnType(rule.column?.column_name)"
+								/>
+							</template>
+							{{ rule.column?.column_name }}
+						</Button>
+					</div>
+					<Button
+						class="flex-shrink-0 rounded-l-none border-l"
+						@click="config.conditional_formatting.formats.splice(idx, 1)"
+					>
+						<template #icon>
+							<X class="h-4 w-4 text-ink-gray-6" stroke-width="1.5" />
+						</template>
+					</Button>
+				</div>
+			</div>
+
+			<Button class="w-full" @click="addNewRule">
+				<template #prefix>
+					<Plus class="h-4 w-4 text-ink-gray-6" stroke-width="1.5" />
+				</template>
+				Add Rule
+			</Button>
+		</div>
+	</CollapsibleSection>
+
+	<NumberFormatSection :config="config" />
+
+	<ConditonalFormattingDialog
+		v-if="showFormatSelectorDialog"
+		v-model="showFormatSelectorDialog"
+		:column-options="colOptions"
+		:initial-rule="editingRule"
+		:selector-key="editingRuleIndex ?? 'new'"
+		@select="handleFormatSelect"
+	/>
+</template>

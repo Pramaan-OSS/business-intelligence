@@ -1,0 +1,180 @@
+<script setup lang="ts">
+import { computed, inject, ref, watch } from 'vue'
+import { __ } from '../../translation'
+import { MapChartConfig } from '../../types/chart.types'
+import { DimensionOption, ColumnOption, QueryResult } from '../../types/query.types'
+import InlineFormControlLabel from '../../components/InlineFormControlLabel.vue'
+import DimensionPicker from './DimensionPicker.vue'
+import MeasurePicker from './MeasurePicker.vue'
+import NumberFormatSection from './NumberFormatSection.vue'
+import CollapsibleSection from './CollapsibleSection.vue'
+import RegionMappingDialog from './RegionMappingDialog.vue'
+import { FormControl, Button } from 'frappe-ui'
+import { FIELDTYPES } from '../../helpers/constants'
+import { call } from 'frappe-ui'
+import { InfoIcon } from 'lucide-vue-next'
+import { chartPreviewKey } from '../chart_preview'
+import { watchDebounced } from '@vueuse/core'
+
+const props = defineProps<{
+	dimensions: DimensionOption[]
+	columnOptions: ColumnOption[]
+	chartName?: string
+	queryResult?: QueryResult
+	queryName?: string
+}>()
+
+const config = defineModel<MapChartConfig>({
+	required: true,
+	default: () => ({
+		location_column: {},
+		value_column: {},
+		map_type: 'world',
+	}),
+})
+
+const discrete_dimensions = computed(() =>
+	props.dimensions.filter((d) => FIELDTYPES.DISCRETE.includes(d.data_type)),
+)
+
+const map_options = [
+	{ label: __('World Map'), value: 'world' },
+	{ label: __('India'), value: 'india' },
+]
+
+const showRegionMappingDialog = ref(false)
+const unresolvedCount = ref<number | null>(null)
+const loadingUnresolved = ref(false)
+
+const userRegions = ref<string[]>([])
+const preview = inject(chartPreviewKey)!
+
+watchDebounced(
+	[() => config.value.location_column?.dimension_name, () => preview.result?.rows],
+	([columnName, rows]) => {
+		if (!columnName || !props.queryName || !rows || rows.length === 0) {
+			userRegions.value = []
+			return
+		}
+
+		try {
+			const mappedRegions = rows.map((row) => row[columnName])
+			userRegions.value = mappedRegions
+		} catch (error) {
+			console.error(error)
+			userRegions.value = []
+		}
+	},
+	{ debounce: 500, immediate: true },
+)
+
+const canCheckRegions = computed(() => {
+	const canCheck =
+		props.chartName &&
+		config.value.map_type &&
+		config.value.location_column?.dimension_name &&
+		userRegions.value.length > 0
+
+	return canCheck
+})
+
+async function checkUnresolvedRegions() {
+	if (!canCheckRegions.value) {
+		return
+	}
+
+	loadingUnresolved.value = true
+	try {
+		const response = await call('insights.api.maps.find_unresolved_regions', {
+			map_type: config.value.map_type,
+			user_regions: userRegions.value,
+			chart_name: props.chartName,
+		})
+		unresolvedCount.value = response.unresolved_count
+	} catch (error) {
+		console.error('Failed to check unresolved regions:', error)
+		unresolvedCount.value = null
+	} finally {
+		loadingUnresolved.value = false
+	}
+}
+
+function openRegionMappingDialog() {
+	showRegionMappingDialog.value = true
+}
+
+// Emit event to refresh the chart
+async function handleMappingsSaved() {
+	await checkUnresolvedRegions()
+	emit('mappingsSaved')
+}
+
+const emit = defineEmits<{
+	mappingsSaved: []
+}>()
+
+// Check unresolved regions when data changes
+watch(
+	[
+		() => config.value.map_type,
+		() => config.value.location_column?.dimension_name,
+		() => userRegions.value.length,
+	],
+	() => {
+		if (canCheckRegions.value) {
+			checkUnresolvedRegions()
+		}
+	},
+)
+</script>
+
+<template>
+	<div class="flex flex-col gap-3">
+		<CollapsibleSection :title="__('Options')">
+			<div class="flex flex-col gap-3 pt-1">
+				<InlineFormControlLabel :label="__('Map type')" control-width="7rem">
+					<FormControl v-model="config.map_type" type="select" :options="map_options" />
+				</InlineFormControlLabel>
+
+				<div class="flex flex-col gap-1">
+					<div class="flex justify-start items-center">
+						<label class="text-xs text-ink-gray-5">{{ __('Region Column') }}</label>
+						<Button
+							variant="ghost"
+							:icon="InfoIcon"
+							@click="openRegionMappingDialog"
+							:class="{
+								'text-ink-gray-5': unresolvedCount === 0,
+								'text-ink-red-6': unresolvedCount !== null && unresolvedCount > 0,
+							}"
+						/>
+					</div>
+					<DimensionPicker
+						v-model="config.location_column"
+						:options="discrete_dimensions"
+					/>
+				</div>
+
+				<MeasurePicker
+					v-model="config.value_column"
+					:column-options="props.columnOptions"
+					:label="__('Value')"
+				/>
+			</div>
+		</CollapsibleSection>
+
+		<NumberFormatSection
+			:config="config"
+			:sole-measure-name="config.value_column?.measure_name"
+		/>
+
+		<RegionMappingDialog
+			v-if="chartName"
+			v-model="showRegionMappingDialog"
+			:chart-name="chartName"
+			:map-type="config.map_type"
+			:user-regions="userRegions"
+			@mappingsSaved="handleMappingsSaved"
+		/>
+	</div>
+</template>

@@ -1,0 +1,125 @@
+<script setup lang="ts">
+import { CheckSquare, SearchIcon, SquareIcon } from 'lucide-vue-next'
+import { computed, inject, ref } from 'vue'
+import ChartIcon from '../charts/components/ChartIcon.vue'
+import { copy } from '../helpers'
+import { WorkbookChart } from '../types/workbook.types'
+import { __ } from '../translation'
+import { Dashboard } from './dashboard'
+
+const showDialog = defineModel()
+const props = defineProps<{ chartOptions: WorkbookChart[] }>()
+
+const dashboard = inject('dashboard') as Dashboard
+
+const searchQuery = ref('')
+const filteredCharts = computed(() => {
+	const query = searchQuery.value.toLowerCase()
+	if (!props.chartOptions.length) return []
+	if (!query) return props.chartOptions
+	return props.chartOptions.filter((chart) => {
+		return chart.title.toLowerCase().includes(query)
+	})
+})
+
+const selectedCharts = ref<WorkbookChart[]>(
+	copy(
+		props.chartOptions.filter((chart) =>
+			dashboard.doc.items.some((item) => item.type === 'chart' && item.chart === chart.name),
+		),
+	),
+)
+function isSelected(chart: WorkbookChart) {
+	return selectedCharts.value.find((c) => c && c.name === chart.name)
+}
+function toggleChart(chart: WorkbookChart) {
+	const index = selectedCharts.value.findIndex((c) => c && c.name === chart.name)
+	if (index === -1) {
+		selectedCharts.value.push(chart)
+	} else {
+		selectedCharts.value.splice(index, 1)
+	}
+}
+function toggleSelectAll() {
+	if (areAllSelected.value) {
+		selectedCharts.value = []
+	} else {
+		selectedCharts.value = [...props.chartOptions]
+	}
+}
+const areAllSelected = computed(() => selectedCharts.value.length === props.chartOptions.length)
+const areNoneSelected = computed(() => selectedCharts.value.length === 0)
+function confirmSelection() {
+	dashboard.addChart(selectedCharts.value, 'selector')
+	selectedCharts.value = []
+	showDialog.value = false
+}
+</script>
+
+<template>
+	<Dialog
+		v-model:open="showDialog"
+		size="sm"
+		:title="__('Select Charts')"
+		:actions="[
+			{
+				label: __('Add'),
+				variant: 'solid',
+				disabled: areNoneSelected,
+				onClick: confirmSelection,
+			},
+			{
+				label: __('Cancel'),
+				onClick: () => (showDialog = false),
+			},
+		]"
+	>
+		<template #default>
+			<div class="-mb-5 flex flex-col gap-2 p-0.5">
+				<div class="flex gap-2">
+					<FormControl
+						class="flex-1"
+						autocomplete="off"
+						:placeholder="__('Search by name')"
+						v-model="searchQuery"
+					>
+						<template #prefix>
+							<SearchIcon class="h-4 w-4 text-ink-gray-4" />
+						</template>
+					</FormControl>
+					<Button @click="toggleSelectAll">
+						{{
+							areAllSelected
+								? __(`Deselect All ({0})`, String(selectedCharts.length))
+								: __(`Select All ({0})`, String(selectedCharts.length))
+						}}
+					</Button>
+				</div>
+				<div
+					class="flex h-[15rem] flex-col overflow-y-scroll rounded-4 border p-0.5 text-base gap-1 py-2"
+				>
+					<template v-for="chart in filteredCharts" :key="chart.name">
+						<div
+							class="flex h-7 flex-shrink-0 cursor-pointer items-center justify-between rounded-4 px-2 p-4 hover:bg-surface-gray-2"
+							@click="toggleChart(chart)"
+						>
+							<div class="flex items-center gap-2 py-4">
+								<ChartIcon
+									:chartType="chart.chart_type"
+									class="flex flex-shrink-0"
+								/>
+								<span>{{ chart.title || chart.name }}</span>
+							</div>
+							<component
+								class="h-4 w-4 flex flex-shrink-0"
+								stroke-width="1.5"
+								:is="isSelected(chart) ? CheckSquare : SquareIcon"
+								:class="isSelected(chart) ? 'text-ink-gray-8' : 'text-ink-gray-5'"
+							/>
+						</div>
+					</template>
+				</div>
+			</div>
+		</template>
+	</Dialog>
+</template>

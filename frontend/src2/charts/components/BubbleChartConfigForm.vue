@@ -1,0 +1,97 @@
+<script setup lang="ts">
+import { BubbleChartConfig } from '../../types/chart.types'
+import { ColumnOption, Dimension, DimensionOption, Measure } from '../../types/query.types'
+import CollapsibleSection from './CollapsibleSection.vue'
+import MeasurePicker from './MeasurePicker.vue'
+import NumberFormatFields from './NumberFormatFields.vue'
+import DimensionPicker from './DimensionPicker.vue'
+
+const props = defineProps<{
+	dimensions: DimensionOption[]
+	columnOptions: ColumnOption[]
+}>()
+
+const config = defineModel<BubbleChartConfig>({
+	required: true,
+	default: () => ({
+		xAxis: {} as Measure,
+		yAxis: {} as Measure,
+		size_column: {} as Measure,
+		dimension: {} as Dimension,
+		quadrant_column: {} as Dimension,
+		show_data_labels: false,
+		show_quadrants: false,
+	}),
+})
+</script>
+
+<template>
+	<CollapsibleSection :title="__('Setup')">
+		<div class="flex flex-col gap-3 pt-1">
+			<MeasurePicker
+				:label="__('X axis')"
+				v-model="config.xAxis"
+				:column-options="props.columnOptions"
+			>
+				<template #config-fields>
+					<NumberFormatFields
+						:config="config"
+						:measure-name="config.xAxis?.measure_name"
+					/>
+				</template>
+			</MeasurePicker>
+
+			<MeasurePicker
+				:label="__('Y axis')"
+				v-model="config.yAxis"
+				:column-options="props.columnOptions"
+			>
+				<template #config-fields>
+					<NumberFormatFields
+						:config="config"
+						:measure-name="config.yAxis?.measure_name"
+					/>
+				</template>
+			</MeasurePicker>
+			<DimensionPicker
+				:label="__('Color by')"
+				v-model="config.quadrant_column!"
+				:options="props.dimensions"
+				@remove="config.quadrant_column = {} as Dimension"
+			/>
+			<MeasurePicker
+				:label="__('Size column')"
+				v-model="config.size_column!"
+				:column-options="props.columnOptions"
+				@remove="config.size_column = {} as Measure"
+			>
+				<template #config-fields>
+					<NumberFormatFields
+						:config="config"
+						:measure-name="config.size_column?.measure_name"
+					/>
+				</template>
+			</MeasurePicker>
+		</div>
+	</CollapsibleSection>
+
+	<CollapsibleSection :title="__('Options')">
+		<div class="flex flex-col gap-2 pt-1">
+			<div class="flex flex-col gap-2">
+				<div class="flex flex-col gap-3">
+					<DimensionPicker
+						:label="__('Name column')"
+						v-model="config.dimension!"
+						:options="props.dimensions"
+						@remove="config.dimension = {} as Dimension"
+					/>
+				</div>
+				<div class="group flex flex-col items-between justify-between rounded-4 py-2">
+					<div class="gap-3">
+						<Toggle v-model="config.show_data_labels" :label="__('Data labels')" />
+					</div>
+				</div>
+			</div>
+		</div>
+	</CollapsibleSection>
+</template>

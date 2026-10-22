@@ -1,0 +1,162 @@
+import frappe
+import frappe.share
+
+from insights.insights.doctype.insights_table_v3.insights_table_v3 import get_table_name
+from insights.insights.doctype.insights_team.insights_team import clear_cache as clear_team_cache
+from insights.tests.factories import DT, create_user, delete_users, delete_workbooks
+
+WEB_USER_EMAIL = "web_user@test.com"
+NON_INSIGHTS_USER = "non_insights_user@test.com"
+USER_1 = "insights_user1@test.com"
+USER_2 = "insights_user2@test.com"
+USER_3 = "insights_user3@test.com"
+ADMIN = "insights_admin@test.com"
+
+TEST_DS_TITLE = "Test DuckDB"
+TEST_DS = frappe.scrub(TEST_DS_TITLE)
+TEST_TABLE1 = get_table_name(TEST_DS, "table1")
+TEST_TABLE2_NAME = get_table_name(TEST_DS, "table2")
+TEST_TABLE3_NAME = get_table_name(TEST_DS, "table3")
+
+TEST_TEAMS = ("team1", "team2")
+
+
+def create_test_users():
+    create_user(
+        WEB_USER_EMAIL,
+        first_name="Web",
+        last_name="User",
+        user_type="Website User",
+    )
+    create_user(
+        NON_INSIGHTS_USER,
+        first_name="Non",
+        last_name="Insights User",
+    )
+    create_user(
+        USER_1,
+        first_name="Insights",
+        last_name="User",
+        roles="Insights User",
+    )
+    create_user(
+        USER_2,
+        first_name="Insights",
+        last_name="User",
+        roles="Insights User",
+    )
+    create_user(
+        USER_3,
+        first_name="Insights",
+        last_name="User",
+        roles="Insights User",
+    )
+    create_user(
+        ADMIN,
+        first_name="Insights",
+        last_name="Admin",
+        roles="Insights Admin",
+    )
+
+
+def delete_test_users():
+    delete_users(
+        WEB_USER_EMAIL,
+        NON_INSIGHTS_USER,
+        USER_1,
+        USER_2,
+        USER_3,
+        ADMIN,
+    )
+
+
+def create_test_data_sources():
+    frappe.get_doc(
+        {
+            "doctype": DT.DATA_SOURCE,
+            "title": TEST_DS_TITLE,
+            "database_type": "DuckDB",
+            "database_name": "test_duckdb",
+        }
+    ).insert()
+
+
+def delete_test_data_sources():
+    frappe.delete_doc(DT.DATA_SOURCE, TEST_DS, force=True)
+
+
+def create_test_tables():
+    for table_name in ("table1", "table2", "table3"):
+        frappe.get_doc(
+            {
+                "doctype": DT.TABLE,
+                "table": table_name,
+                "label": table_name,
+                "data_source": TEST_DS,
+                "sync_mode": "Full",
+            }
+        ).insert()
+
+
+def delete_test_tables():
+    frappe.delete_doc(DT.TABLE, TEST_TABLE1, force=True)
+    frappe.delete_doc(DT.TABLE, TEST_TABLE2_NAME, force=True)
+    frappe.delete_doc(DT.TABLE, TEST_TABLE3_NAME, force=True)
+
+
+def create_test_team(team_name, members, grants=None):
+    """A team of `members` holding a grant on each (resource_type, name) in `grants`."""
+    team = frappe.get_doc({"doctype": DT.TEAM, "team_name": team_name})
+    for member in members:
+        team.append("team_members", {"user": member})
+    for resource_type, resource_name in grants or []:
+        team.append(
+            "team_permissions",
+            {"resource_type": resource_type, "resource_name": resource_name},
+        )
+    team.save(ignore_permissions=True)
+    clear_team_cache()
+    return team
+
+
+def create_test_teams():
+    return create_test_team("team1", [USER_1])
+
+
+def delete_test_teams():
+    for team_name in TEST_TEAMS:
+        frappe.delete_doc(DT.TEAM, team_name, force=True)
+
+
+def update_dashboard_access(dashboard_name, people_with_access):
+    frappe.get_doc(DT.DASHBOARD, dashboard_name).update_access({"people_with_access": people_with_access})
+
+
+def share_chart(chart_name, user):
+    frappe.share.add(DT.CHART, chart_name, user=user, read=1, notify=0)
+
+
+def unshare_chart(chart_name, user):
+    share_name = frappe.db.get_value(
+        "DocShare",
+        {
+            "share_doctype": DT.CHART,
+            "share_name": chart_name,
+            "user": user,
+        },
+    )
+    if share_name:
+        frappe.delete_doc("DocShare", share_name, ignore_permissions=True)
+
+
+def delete_test_workbooks():
+    delete_workbooks(owners=[USER_1, USER_2, ADMIN])
+
+
+def cleanup_test_fixtures():
+    delete_test_workbooks()
+    delete_test_teams()
+    delete_test_tables()
+    delete_test_data_sources()
+    delete_test_users()
+    clear_team_cache()

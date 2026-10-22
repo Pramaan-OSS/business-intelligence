@@ -1,0 +1,27 @@
+#!/bin/sh
+set -eu
+cd /app
+python docker/setup.py
+node /app/vendor/framework/socketio.js > /app/.runtime/bench/logs/socket.log 2>&1 &
+socket_pid=$!
+cd /app/.runtime/bench/sites
+python -m frappe.utils.bench_helper frappe worker > ../logs/worker.log 2>&1 &
+worker_pid=$!
+scheduler_pid=""
+if [ "$(cat ../.outside-configured)" = yes ]; then
+  python -m frappe.utils.bench_helper frappe schedule > ../logs/scheduler.log 2>&1 &
+  scheduler_pid=$!
+fi
+cleanup() { kill "$socket_pid" "$worker_pid" ${scheduler_pid:+"$scheduler_pid"} 2>/dev/null || true; }
+trap cleanup EXIT INT TERM
+case "${BI_SERVER_MODE:-production}" in
+  production)
+    gunicorn --bind 0.0.0.0:8000 --workers 2 --worker-class sync --preload \
+      --timeout 120 --graceful-timeout 30 --max-requests 1000 --max-requests-jitter 100 \
+      --access-logfile - --error-logfile - insights.wsgi:application
+    ;;
+  development)
+    python -m frappe.utils.bench_helper frappe --site "$BI_SITE_NAME" serve --port 8000 --noreload
+    ;;
+  *) printf '%s\n' 'Choose BI_SERVER_MODE=production or development.'; exit 1 ;;
+esac

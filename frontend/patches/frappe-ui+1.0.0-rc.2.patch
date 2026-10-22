@@ -1,0 +1,12 @@
+diff --git a/node_modules/frappe-ui/src/composables/useAutofocusOnOpen.ts b/node_modules/frappe-ui/src/composables/useAutofocusOnOpen.ts
+--- a/node_modules/frappe-ui/src/composables/useAutofocusOnOpen.ts
++++ b/node_modules/frappe-ui/src/composables/useAutofocusOnOpen.ts
+@@ -51,7 +51,7 @@ export function useAutofocusOnOpen(
+       await nextTick()
+       requestAnimationFrame(() => {
+         const root = getContainer()
+-        if (!root) return
++        if (!root || typeof root.querySelector !== 'function') return
+         const marker = root.querySelector<HTMLElement>('[autofocus]')
+         if (!marker) return
+         const target = marker.matches(FOCUSABLE_SELECTOR)

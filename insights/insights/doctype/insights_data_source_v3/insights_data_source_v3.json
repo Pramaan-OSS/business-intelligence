@@ -1,0 +1,298 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2024-06-09 19:42:19.655930",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "title",
+  "type",
+  "database_type",
+  "column_break_khqs",
+  "status",
+  "api_configuration_section",
+  "column_break_api",
+  "section_break_mbxa",
+  "database_name",
+  "schema",
+  "host",
+  "port",
+  "use_ssl",
+  "ssl_ca",
+  "is_ducklake",
+  "is_site_db",
+  "is_frappe_db",
+  "enable_stored_procedure_execution",
+  "column_break_pfsa",
+  "username",
+  "password",
+  "bigquery_configuration_section",
+  "bigquery_project_id",
+  "bigquery_dataset_id",
+  "bigquery_service_account_key",
+  "section_break_rccm",
+  "http_headers",
+  "section_break_ajvs",
+  "connection_string",
+  "connected_app",
+  "connected_path",
+  "connected_rows_key",
+  "connected_user",
+  "connected_last_sync"
+ ],
+ "fields": [
+  {
+   "fieldname": "title",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Title",
+   "reqd": 1
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Inactive\nActive"
+  },
+  {
+   "depends_on": "eval: doc.type == 'Database'",
+   "fieldname": "database_type",
+   "fieldtype": "Select",
+   "label": "Database Type",
+   "options": "MariaDB\nPostgreSQL\nSQLite\nDuckDB\nBigQuery\nClickHouse"
+  },
+  {
+   "fieldname": "host",
+   "fieldtype": "Data",
+   "label": "Host"
+  },
+  {
+   "fieldname": "port",
+   "fieldtype": "Int",
+   "label": "Port"
+  },
+  {
+   "default": "0",
+   "description": "Encrypts the connection. Add a CA certificate below to also verify the server.",
+   "fieldname": "use_ssl",
+   "fieldtype": "Check",
+   "label": "Encrypt Connection (SSL)"
+  },
+  {
+   "default": "0",
+   "depends_on": "is_site_db",
+   "fieldname": "is_site_db",
+   "fieldtype": "Check",
+   "label": "Is Site Database",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "depends_on": "is_frappe_db",
+   "fieldname": "is_frappe_db",
+   "fieldtype": "Check",
+   "label": "Is Frappe Database",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_pfsa",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "database_name",
+   "fieldtype": "Data",
+   "label": "Database Name"
+  },
+  {
+   "fieldname": "username",
+   "fieldtype": "Data",
+   "label": "Username"
+  },
+  {
+   "fieldname": "password",
+   "fieldtype": "Password",
+   "label": "Password"
+  },
+  {
+   "fieldname": "section_break_ajvs",
+   "fieldtype": "Section Break"
+  },
+  {
+   "depends_on": "eval:doc.database_type == 'PostgreSQL'",
+   "fieldname": "connection_string",
+   "fieldtype": "Text",
+   "label": "Connection String",
+   "permlevel": 1
+  },
+  {
+   "depends_on": "eval:doc.database_type == 'BigQuery'",
+   "fieldname": "bigquery_project_id",
+   "fieldtype": "Data",
+   "label": "BigQuery Project ID"
+  },
+  {
+   "depends_on": "eval:doc.database_type == 'BigQuery'",
+   "fieldname": "bigquery_dataset_id",
+   "fieldtype": "Data",
+   "label": "BigQuery Dataset ID"
+  },
+  {
+   "depends_on": "eval:doc.database_type == 'BigQuery'",
+   "fieldname": "bigquery_service_account_key",
+   "fieldtype": "JSON",
+   "label": "BigQuery Service Account Key (JSON)",
+   "permlevel": 1
+  },
+  {
+   "default": "0",
+   "depends_on": "eval:[\"MariaDB\", \"PostgreSQL\", \"MSSQL\"].includes(doc.database_type)",
+   "fieldname": "enable_stored_procedure_execution",
+   "fieldtype": "Check",
+   "label": "Enable Stored Procedure Execution"
+  },
+  {
+   "depends_on": "eval:doc.database_type == 'PostgreSQL'",
+   "fieldname": "schema",
+   "fieldtype": "Data",
+   "label": "Schema"
+  },
+  {
+   "depends_on": "eval:doc.database_type == 'DuckDB' && doc.database_name?.includes(\"http\")",
+   "fieldname": "http_headers",
+   "fieldtype": "JSON",
+   "label": "HTTP Headers",
+   "permlevel": 1
+  },
+  {
+   "default": "0",
+   "depends_on": "eval:doc.database_type == 'DuckDB'",
+   "fieldname": "is_ducklake",
+   "fieldtype": "Check",
+   "label": "Is DuckLake"
+  },
+  {
+   "fieldname": "column_break_khqs",
+   "fieldtype": "Column Break"
+  },
+  {
+   "depends_on": "eval: doc.type == 'Database'",
+   "fieldname": "section_break_mbxa",
+   "fieldtype": "Section Break"
+  },
+  {
+   "depends_on": "eval:doc.database_type == 'BigQuery'",
+   "fieldname": "bigquery_configuration_section",
+   "fieldtype": "Section Break",
+   "label": "BigQuery Configuration"
+  },
+  {
+   "fieldname": "section_break_rccm",
+   "fieldtype": "Section Break"
+  },
+  {
+   "default": "Database",
+   "fieldname": "type",
+   "fieldtype": "Select",
+   "label": "Type",
+   "options": "Database\nREST API\nConnected App",
+   "reqd": 1
+  },
+  {
+   "depends_on": "eval:doc.type=='REST API'",
+   "fieldname": "api_configuration_section",
+   "fieldtype": "Section Break",
+   "label": "API Configuration"
+  },
+  {
+   "depends_on": "eval:doc.type=='REST API'",
+   "fieldname": "column_break_api",
+   "fieldtype": "Column Break"
+  },
+  {
+   "depends_on": "eval:doc.use_ssl && ['MariaDB', 'PostgreSQL'].includes(doc.database_type)",
+   "description": "Optional. PEM certificate of the authority that signed the database server's certificate. With one, Insights checks that the server is who it says it is. Without one, the connection is encrypted but the server is not checked.",
+   "fieldname": "ssl_ca",
+   "fieldtype": "Small Text",
+   "label": "CA Certificate"
+  },
+  {
+   "fieldname": "connected_app",
+   "fieldtype": "Data",
+   "label": "Connected app",
+   "depends_on": "eval: doc.type == 'Connected App'"
+  },
+  {
+   "fieldname": "connected_path",
+   "fieldtype": "Data",
+   "label": "Reviewed read path",
+   "depends_on": "eval: doc.type == 'Connected App'"
+  },
+  {
+   "fieldname": "connected_rows_key",
+   "fieldtype": "Data",
+   "label": "Rows field (blank for an array)",
+   "depends_on": "eval: doc.type == 'Connected App'"
+  },
+  {
+   "fieldname": "connected_user",
+   "fieldtype": "Link",
+   "label": "Connected member",
+   "depends_on": "eval: doc.type == 'Connected App'",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "connected_last_sync",
+   "fieldtype": "Datetime",
+   "label": "Last connected sync",
+   "depends_on": "eval: doc.type == 'Connected App'",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [
+  {
+   "link_doctype": "Insights Table v3",
+   "link_fieldname": "data_source"
+  }
+ ],
+ "modified": "2026-01-26 14:31:03.238213",
+ "modified_by": "Administrator",
+ "module": "Insights",
+ "name": "Insights Data Source v3",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Insights Admin",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Insights User",
+   "share": 1
+  },
+  {
+   "permlevel": 1,
+   "read": 1,
+   "role": "Insights Admin",
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

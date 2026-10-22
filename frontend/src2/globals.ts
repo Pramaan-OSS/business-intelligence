@@ -1,0 +1,35 @@
+import {
+	Avatar,
+	Badge,
+	Button,
+	Combobox,
+	Dialog,
+	Dropdown,
+	ErrorMessage,
+	FormControl,
+	LoadingIndicator,
+	MultiSelect,
+	Popover,
+	TabButtons,
+	Tooltip,
+} from 'frappe-ui'
+import Toggle from './components/Toggle.vue'
+
+import { App } from 'vue'
+
+export function registerGlobalComponents(app: App) {
+	app.component('Badge', Badge)
+	app.component('Button', Button)
+	app.component('Dialog', Dialog)
+	app.component('Avatar', Avatar)
+	app.component('TabButtons', TabButtons)
+	app.component('Popover', Popover)
+	app.component('Tooltip', Tooltip)
+	app.component('Toggle', Toggle)
+	app.component('Dropdown', Dropdown)
+	app.component('FormControl', FormControl)
+	app.component('LoadingIndicator', LoadingIndicator)
+	app.component('Combobox', Combobox)
+	app.component('MultiSelect', MultiSelect)
+	app.component('ErrorMessage', ErrorMessage)
+}

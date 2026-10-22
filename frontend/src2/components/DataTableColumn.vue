@@ -1,0 +1,68 @@
+<script setup lang="ts">
+import { Button, Dropdown } from 'frappe-ui'
+import { ArrowDownWideNarrow, ArrowUpDown, ArrowUpNarrowWide, XIcon } from 'lucide-vue-next'
+import { h, ref, watchEffect } from 'vue'
+import { SortDirection } from '../types/query.types'
+import { __ } from '../translation'
+import ContentEditable from './ContentEditable.vue'
+
+const props = defineProps<{
+	label: string
+	sortOrder?: SortDirection
+	onSortChange?: (direction: SortDirection) => void
+	onRename?: (new_name: string) => void
+}>()
+
+const _label = ref(props.label)
+watchEffect(() => (_label.value = props.label))
+
+const sortOptions = [
+	{
+		label: __('Sort Ascending'),
+		icon: h(ArrowUpNarrowWide, { class: 'h-4 w-4 text-ink-gray-6', strokeWidth: 1.5 }),
+		onClick: () => props.onSortChange?.('asc'),
+	},
+	{
+		label: __('Sort Descending'),
+		icon: h(ArrowDownWideNarrow, { class: 'h-4 w-4 text-ink-gray-6', strokeWidth: 1.5 }),
+		onClick: () => props.onSortChange?.('desc'),
+	},
+	{
+		label: __('Remove Sort'),
+		icon: h(XIcon, { class: 'h-4 w-4 text-ink-gray-6', strokeWidth: 1.5 }),
+		onClick: () => props.onSortChange?.(''),
+	},
+]
+</script>
+
+<template>
+	<div class="flex w-full items-center gap-0.5">
+		<slot name="prefix" />
+		<ContentEditable
+			v-model="_label"
+			:placeholder="__('Column')"
+			class="!h-6 !px-0.5 whitespace-nowrap text-sm-medium first:ml-2"
+			:disabled="!props.onRename"
+			@returned="props.onRename?.(_label)"
+			@blur="props.onRename?.(_label)"
+		/>
+		<Dropdown v-if="props.onSortChange" :options="sortOptions">
+			<Button variant="ghost" class="rounded-none">
+				<template #icon>
+					<component
+						:is="
+							!props.sortOrder
+								? ArrowUpDown
+								: props.sortOrder === 'asc'
+								  ? ArrowUpNarrowWide
+								  : ArrowDownWideNarrow
+						"
+						class="h-3.5 w-3.5 text-ink-gray-6"
+						stroke-width="1.5"
+					/>
+				</template>
+			</Button>
+		</Dropdown>
+		<slot name="suffix" />
+	</div>
+</template>

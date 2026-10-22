@@ -1,0 +1,14 @@
+.git
+.env
+.scratch
+.runtime
+.tools
+.venv
+**/node_modules
+**/__pycache__
+*.pyc
+frontend/dist
+insights/public/frontend
+e2e
+frontend/e2e
+review/__pycache__

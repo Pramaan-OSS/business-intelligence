@@ -1,0 +1,580 @@
+# Copyright (c) 2022, Frappe Technologies Pvt. Ltd. and contributors
+# For license information, please see license.txt
+
+
+import os
+import re
+from contextlib import contextmanager
+
+import frappe
+from frappe.model.document import Document
+from ibis import BaseBackend
+
+import insights
+from insights.insights.doctype.insights_table_link_v3.insights_table_link_v3 import (
+    InsightsTableLinkv3,
+)
+from insights.insights.doctype.insights_table_v3.insights_table_v3 import (
+    InsightsTablev3,
+)
+from insights.insights.doctype.insights_table_v3.table_rename import rename_tables
+
+from .connectors.bigquery import get_bigquery_connection
+from .connectors.clickhouse import get_clickhouse_connection
+from .connectors.duckdb import get_duckdb_connection
+from .connectors.frappe_db import (
+    get_frappedb_connection,
+    get_frappedb_table_links,
+    get_sitedb_connection,
+    is_frappe_db,
+)
+from .connectors.mariadb import get_mariadb_connection
+from .connectors.mssql import get_mssql_connection
+from .connectors.postgresql import get_postgres_connection
+from .connectors.sqlite import get_sqlite_connection
+
+
+class DataSourceConnectionError(frappe.ValidationError):
+    pass
+
+
+def source_type(database_type: str | None, is_site_db: bool = False) -> str:
+    return "site_db" if is_site_db else (database_type or "unknown").lower()
+
+
+class InsightsDataSourceDocument:
+    def autoname(self):
+        self.name = frappe.scrub(self.title)
+
+    def before_insert(self):
+        if (
+            not frappe.flags.in_migrate
+            and self.is_site_db
+            and frappe.db.exists("Insights Data Source v3", {"is_site_db": 1})
+        ):
+            frappe.throw("Only one site database can be configured")
+
+    def before_import(self):
+        if not frappe.flags.in_migrate or not self.is_site_db:
+            return
+
+        if not frappe.db.exists("Insights Data Source v3", "Site DB"):
+            return
+
+        existing_doc = frappe.get_doc("Insights Data Source v3", "Site DB")
+        if not (
+            existing_doc.host
+            or existing_doc.port
+            or existing_doc.database_name
+            or existing_doc.username
+            or existing_doc.password
+        ):
+            return
+
+        # TODO: better way to handle this?
+        # preserve customized site db credentials
+        self.update(
+            {
+                "host": existing_doc.host,
+                "port": existing_doc.port,
+                "database_name": existing_doc.database_name,
+                "username": existing_doc.username,
+                "password": existing_doc.get_password("password", raise_exception=False),
+            }
+        )
+
+    def on_update(self):
+        # db_set loads the saved row as the doc before save, which hides a change
+        credentials_changed = self.has_credentials_changed()
+
+        if self.type == "Connected App":
+            self.db_set("status", "Active")
+            return
+
+        if self.type == "REST API":
+            self.db_set(
+                {
+                    "database_type": "DuckDB",
+                    "database_name": None,  # this should never be used
+                }
+            )
+
+        if self.is_site_db:
+            self.db_set("is_frappe_db", 1)
+            self.db_set("status", "Active")
+
+            if frappe.conf.db_type == "postgres":
+                self.db_set("database_type", "PostgreSQL")
+
+            with db_connections():
+                self.update_table_list()
+
+            return
+
+        self.status = "Active" if self.test_connection() else "Inactive"
+        self.db_set("status", self.status)
+
+        if (
+            self.status == "Active"
+            and credentials_changed
+            and self.database_type in ["MariaDB", "PostgreSQL"]
+        ):
+            self.db_set("is_frappe_db", is_frappe_db(self))
+
+        # a REST API source's tables come from its imports, which Update Tables lists
+        if self.status == "Active" and credentials_changed and self.type != "REST API":
+            self.update_table_list()
+
+    def has_credentials_changed(self):
+        doc_before = self.get_doc_before_save()
+        if not doc_before:
+            return True
+        if self.database_type in ["SQLite", "DuckDB"]:
+            changed = self.database_name != doc_before.database_name
+            if self.database_type == "DuckDB":
+                changed = changed or self.http_headers != doc_before.http_headers
+            return changed
+        elif self.database_type == "BigQuery":
+            return (
+                self.bigquery_project_id != doc_before.bigquery_project_id
+                or self.bigquery_dataset_id != doc_before.bigquery_dataset_id
+                or self.bigquery_service_account_key != doc_before.bigquery_service_account_key
+            )
+        elif self.database_type in ["MariaDB", "PostgreSQL", "ClickHouse", "MSSQL"]:
+            return (
+                self.database_name != doc_before.database_name
+                or self.schema != doc_before.schema
+                or self.password != doc_before.password
+                or self.username != doc_before.username
+                or self.host != doc_before.host
+                or self.port != doc_before.port
+                or self.use_ssl != doc_before.use_ssl
+                or self.ssl_ca != doc_before.ssl_ca
+            )
+
+    def on_trash(self):
+        if self.is_site_db:
+            frappe.throw("Cannot delete the site database. It is needed for Insights.")
+
+        linked_doctypes = ["Insights Table v3", "Insights Table Link v3"]
+        for doctype in linked_doctypes:
+            for name in frappe.db.get_all(
+                doctype,
+                {"data_source": self.name},
+                pluck="name",
+            ):
+                frappe.delete_doc(doctype, name)
+
+    def validate(self):
+        if self.is_site_db:
+            return
+        if self.type == "Connected App":
+            from insights.api.connected_sources import validate_source
+            validate_source(self)
+            return
+        if self.type == "REST API":
+            frappe.throw(
+                "Connecting to an address directly is not available yet. Use one of the database sources."
+            )
+        elif self.database_type == "SQLite" or self.database_type == "DuckDB":
+            self.validate_database_name()
+        elif self.database_type == "BigQuery":
+            self.validate_bigquery_fields()
+        else:
+            self.validate_remote_db_fields()
+
+    def validate_database_name(self):
+        mandatory = ("database_name",)
+        for field in mandatory:
+            if not self.get(field):
+                frappe.throw(f"{field} is mandatory for {self.database_type} Database")
+
+    def validate_remote_db_fields(self):
+        if self.connection_string:
+            return
+        mandatory = ("host", "port", "username", "password", "database_name")
+        for field in mandatory:
+            if not self.get(field):
+                frappe.throw(f"{field} is mandatory for Database")
+
+    def validate_bigquery_fields(self):
+        mandatory = (
+            "bigquery_project_id",
+            "bigquery_dataset_id",
+            "bigquery_service_account_key",
+        )
+        for field in mandatory:
+            if not self.get(field):
+                frappe.throw(f"{field} is mandatory for BigQuery Database")
+
+
+class InsightsDataSourcev3(InsightsDataSourceDocument, Document):
+    # begin: auto-generated types
+    # This code is auto-generated. Do not modify anything in this block.
+
+    from typing import TYPE_CHECKING
+
+    if TYPE_CHECKING:
+        from frappe.types import DF
+
+        api_authentication_type: DF.Literal["None", "API Key / Bearer Token", "Basic Authentication"]
+        api_base_url: DF.Data | None
+        api_custom_headers: DF.JSON | None
+        api_password: DF.Password | None
+        api_token: DF.Password | None
+        api_username: DF.Data | None
+        bigquery_dataset_id: DF.Data | None
+        bigquery_project_id: DF.Data | None
+        bigquery_service_account_key: DF.JSON | None
+        connection_string: DF.Text | None
+        database_name: DF.Data | None
+        database_type: DF.Literal["MariaDB", "PostgreSQL", "SQLite", "DuckDB", "BigQuery", "ClickHouse"]
+        enable_stored_procedure_execution: DF.Check
+        host: DF.Data | None
+        http_headers: DF.JSON | None
+        is_ducklake: DF.Check
+        is_frappe_db: DF.Check
+        is_site_db: DF.Check
+        password: DF.Password | None
+        port: DF.Int
+        schema: DF.Data | None
+        ssl_ca: DF.SmallText | None
+        status: DF.Literal["Inactive", "Active"]
+        title: DF.Data
+        type: DF.Literal["Database", "REST API"]
+        use_ssl: DF.Check
+        username: DF.Data | None
+    # end: auto-generated types
+
+    def throw_connection_error(self, error: Exception):
+        """Report a failed connection without repeating what the driver said.
+
+        A driver names the host it could not reach, the account it was refused
+        as, and — when the source is configured by connection string — the
+        password inside it. Anyone who may edit the data source has already
+        seen all three, so they read the driver's own words. Everyone else,
+        including a Guest running a published query, gets the fact and nothing
+        else. The detail stays in the Error Log either way.
+        """
+        frappe.log_error(title=f"Failed to connect to '{self.title}'")
+        may_configure = frappe.has_permission(self.doctype, "write", self)
+        frappe.throw(
+            title="Connection Error",
+            msg=(
+                f"There was an error connecting to '{self.title}' data source: {error!s}"
+                if may_configure
+                else f"Could not connect to the '{self.title}' data source."
+            ),
+            exc=DataSourceConnectionError,
+        )
+
+    def _get_ibis_backend(self) -> BaseBackend:
+        if self.name in insights.db_connections:
+            return insights.db_connections[self.name]
+
+        try:
+            db: BaseBackend = self._get_db_connection()
+        except Exception as e:
+            self.throw_connection_error(e)
+
+        if self.database_type == "MariaDB":
+            db.raw_sql("SET SESSION time_zone='+00:00'")
+            db.raw_sql("SET collation_connection = 'utf8mb4_unicode_ci'")
+            try:
+                db.raw_sql("SET SESSION tx_read_only = TRUE")
+            except Exception:
+                db.raw_sql("SET SESSION TRANSACTION_READ_ONLY = 1")
+
+            from insights.insights.doctype.insights_settings.insights_settings import (
+                get_max_execution_time,
+            )
+
+            ## Todo: Permanent fix for this
+            try:
+                db.raw_sql(f"SET MAX_STATEMENT_TIME={get_max_execution_time()}")
+            except Exception:
+                pass  # nosemgrep - MySQL has no such variable, so its queries run without a time limit
+
+        insights.db_connections[self.name] = db
+        return db
+
+    @contextmanager
+    def write_connection(self):
+        """Safely yield a writable DuckDB connection for this data source.
+
+        Evicts the cached read-only connection, opens a write connection with
+        access to private files, then disconnects on exit so the read
+        connection is lazily re-opened cleanly.
+
+        Only supported for local DuckDB data sources.
+        """
+        if self.database_type != "DuckDB" or (self.database_name or "").startswith("http"):
+            raise NotImplementedError(
+                f"write_connection() is only supported for local DuckDB data sources, not '{self.database_type}'"
+            )
+
+        from frappe.utils import get_files_path
+
+        from .connectors.duckdb import get_duckdb_path, local_duckdb_write_connection
+
+        path = get_duckdb_path(self)
+        private_files_path = os.path.realpath(get_files_path(is_private=1))
+        with local_duckdb_write_connection(
+            path,
+            cache_key=self.name,
+            allowed_dir=private_files_path,
+        ) as db:
+            yield db
+
+    def get_sqlglot_dialect(self) -> str | None:
+        return db_type_to_sqlglot_dialect(self.database_type)
+
+    def _get_db_connection(self) -> BaseBackend:
+        if self.is_site_db:
+            return get_sitedb_connection()
+        if self.is_frappe_db:
+            return get_frappedb_connection(self)
+        if self.type in ("REST API", "Connected App"):
+            return insights.warehouse.get_connection(self.schema)
+        if self.database_type == "MariaDB":
+            return get_mariadb_connection(self)
+        if self.database_type == "PostgreSQL":
+            return get_postgres_connection(self)
+        if self.database_type == "DuckDB":
+            return get_duckdb_connection(self)
+        if self.database_type == "SQLite":
+            return get_sqlite_connection(self)
+        if self.database_type == "BigQuery":
+            return get_bigquery_connection(self)
+        if self.database_type == "MSSQL":
+            return get_mssql_connection(self)
+        if self.database_type == "ClickHouse":
+            return get_clickhouse_connection(self)
+
+        frappe.throw(f"Unsupported database type: {self.database_type}")
+
+    def get_postgres_schemas(self) -> list[str]:
+        """Schemas this data source reads from, as a comma separated list in `schema`."""
+        schemas = [s.strip() for s in (self.schema or "").split(",") if s.strip()]
+        return schemas or ["public"]
+
+    def qualify_table_names(self) -> bool:
+        """Whether table names should have a `<schema>.` prefix.
+
+        Only useful when the data source spans more than one schema — with a single schema
+        there is nothing to disambiguate and the prefix just leaks into the UI and breaks the
+        table -> doctype mapping for frappe databases (frappe/insights#1195).
+        """
+        return self.database_type == "PostgreSQL" and len(self.get_postgres_schemas()) > 1
+
+    def format_table_name(self, table: str, schema: str | None = None) -> str:
+        """Name `table` the way `get_table_list` does, so it matches `Insights Table v3`.
+
+        `schema` defaults to the first one configured, which is where a frappe database
+        keeps its tables.
+        """
+        if not self.qualify_table_names():
+            return table
+        return f"{schema or self.get_postgres_schemas()[0]}.{table}"
+
+    def split_table_name(self, table_name: str) -> tuple[str, str]:
+        """Resolve `(schema, table)` for a postgres table name — inverse of `format_table_name`.
+
+        Names are only qualified when the data source spans multiple schemas, but names
+        stored before that was the case may still have the prefix — so accept both.
+        """
+        schemas = self.get_postgres_schemas()
+        schema, separator, table = table_name.partition(".")
+        if separator and schema in schemas:
+            return schema, table
+        return schemas[0], table_name
+
+    def table_identity(self, table_name: str) -> str:
+        """Name the remote table `table_name` points at, free of the spelling of the day.
+
+        `format_table_name` answers differently once the number of configured schemas
+        changes, so the stored name is a spelling, not an identity. Matching the remote
+        list against stored spellings makes one table look like two (frappe/insights#1371).
+        """
+        if self.database_type != "PostgreSQL":
+            return table_name
+        schema, table = self.split_table_name(table_name)
+        return f"{schema}.{table}"
+
+    def get_table_list(self):
+        db = self._get_ibis_backend()
+
+        database_name = self.database_name
+        if self.is_site_db:
+            database_name = frappe.conf.db_name
+
+        if not database_name or self.database_type == "SQLite":
+            return db.list_tables()
+
+        if self.database_type == "DuckDB":
+            return db.list_tables(database=self.schema)
+
+        if self.database_type == "PostgreSQL":
+            tables = []
+            for schema in self.get_postgres_schemas():
+                schema_tables = db.list_tables(database=(database_name, schema))
+                tables.extend(self.format_table_name(table, schema) for table in schema_tables)
+            return tables
+
+        contains_special_chars = re.search(r"[^a-zA-Z0-9_]", database_name)
+        if not contains_special_chars:
+            return db.list_tables()
+
+        return db.list_tables(database=database_name)
+
+    @property
+    def source_type(self):
+        return source_type(self.database_type, self.is_site_db)
+
+    @frappe.whitelist()
+    def test_connection(self, raise_exception: bool | None = False):
+        """Reach the source once and report whether it answered.
+
+        Every test arrives here, the button and the save alike, so the outcome
+        is counted once. What the driver said stays here. Only the kind of
+        failure travels. The message and the host it names do not.
+        """
+        try:
+            self.attempt_connection()
+        except Exception:
+            if raise_exception:
+                raise
+            return False
+
+        return True
+
+    def attempt_connection(self):
+        if self.type == "REST API":
+            frappe.throw(
+                "Connecting to an address directly is not available yet. Use one of the database sources."
+            )
+        self.get_table_list()
+
+    def update_table_list(self, force=False):
+        remote_tables = self.get_table_list()
+
+        blacklist_patterns = ["^_", "^sqlite_"]
+        blacklisted = lambda table: any(re.match(p, table) for p in blacklist_patterns)
+        remote_tables = [t for t in remote_tables if not blacklisted(t)]
+
+        if not remote_tables:
+            return
+
+        if force:
+            # TODO: prevent deletion of tables if the imports are customized
+            frappe.db.delete(
+                "Insights Table v3",
+                {"data_source": self.name},
+            )
+            InsightsTablev3.bulk_create(self.name, list(set(remote_tables)))
+            self.update_table_links(force)
+            return
+
+        new_tables, renames = self.reconcile_table_names(remote_tables)
+        if not new_tables and not renames:
+            return
+
+        rename_tables(self.name, renames)
+        InsightsTablev3.bulk_create(self.name, list(new_tables))
+        self.update_table_links(force)
+
+    def reconcile_table_names(self, remote_tables: list[str]) -> tuple[set[str], dict[str, str]]:
+        """Split the remote list into tables to create and stored names to re-spell.
+
+        A record already exists for a remote table whenever some stored name has the same
+        `table_identity`. That name may not be the one `get_table_list` reports today, so
+        the record is renamed. A second record would import the same table a second time.
+        """
+        stored_names = frappe.get_all(
+            "Insights Table v3",
+            {"data_source": self.name},
+            pluck="table",
+        )
+
+        stored_by_identity = {}
+        for name in stored_names:
+            stored_by_identity.setdefault(self.table_identity(name), []).append(name)
+
+        new_tables = set()
+        renames = {}
+        for remote in set(remote_tables):
+            matches = stored_by_identity.get(self.table_identity(remote))
+            if not matches:
+                new_tables.add(remote)
+                continue
+            for stored in matches:
+                if stored != remote:
+                    renames[stored] = remote
+
+        return new_tables, renames
+
+    def update_table_links(self, force=False):
+        links = []
+        if self.is_site_db or self.is_frappe_db:
+            links = get_frappedb_table_links(self)
+
+        if force:
+            frappe.db.delete(
+                "Insights Table Link v3",
+                {"data_source": self.name},
+            )
+
+        for link in links:
+            InsightsTableLinkv3.create(
+                self.name,
+                link.left_table,
+                link.right_table,
+                link.left_column,
+                link.right_column,
+            )
+
+    def get_ibis_table(self, table_name):
+        remote_db = self._get_ibis_backend()
+        if self.database_type == "PostgreSQL":
+            schema, table = self.split_table_name(table_name)
+            return remote_db.table(table, database=schema)
+        if self.type in ("REST API", "Connected App"):
+            return remote_db.table(table_name, database=self.schema)
+        return remote_db.table(table_name)
+
+
+def after_request():
+    closed = {}
+    for name, db in insights.db_connections.items():
+        try:
+            db.disconnect()
+            closed[name] = True
+        except Exception:
+            frappe.log_error(title=f"Failed to disconnect db connection for {name}")
+
+    for name in closed:
+        del insights.db_connections[name]
+
+
+@contextmanager
+def db_connections():
+    """Context manager to ensure database connections are cleaned up."""
+    try:
+        yield
+    finally:
+        after_request()
+
+
+def db_type_to_sqlglot_dialect(db_type: str) -> str | None:
+    if db_type == "REST API":
+        return "duckdb"
+
+    return {
+        "MariaDB": "mysql",
+        "PostgreSQL": "postgres",
+        "SQLite": "sqlite",
+        "DuckDB": "duckdb",
+        "BigQuery": "bigquery",
+        "MSSQL": "tsql",
+        "ClickHouse": "clickhouse",
+    }.get(db_type)

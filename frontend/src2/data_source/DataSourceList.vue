@@ -1,0 +1,189 @@
+<script setup lang="tsx">
+import ConnectedAppDialog from './ConnectedAppDialog.vue'
+import { Avatar, Breadcrumbs } from 'frappe-ui'
+import { ListView } from 'frappe-ui/experimental'
+import { PlusIcon, SearchIcon } from 'lucide-vue-next'
+import { computed, ref } from 'vue'
+import CSVIcon from '../components/Icons/CSVIcon.vue'
+import IndicatorIcon from '../components/Icons/IndicatorIcon.vue'
+import SelectTypeDialog from '../components/SelectTypeDialog.vue'
+import useUserStore from '../users/users'
+import ConnectMariaDBDialog from './ConnectMariaDBDialog.vue'
+import ConnectPostgreSQLDialog from './ConnectPostgreSQLDialog.vue'
+import useDataSourceStore, { getDatabaseLogo } from './data_source'
+import { DataSourceListItem } from './data_source.types'
+import UploadCSVFileDialog from './UploadCSVFileDialog.vue'
+import ConnectDuckDBDialog from './ConnectDuckDBDialog.vue'
+import ConnectClickhouseDialog from './ConnectClickhouseDialog.vue'
+import { __ } from '../translation'
+
+const dataSourceStore = useDataSourceStore()
+dataSourceStore.getSources()
+
+const searchQuery = ref('')
+const filteredDataSources = computed(() => {
+	if (!searchQuery.value) {
+		return dataSourceStore.sources
+	}
+	return dataSourceStore.sources.filter((data_source) =>
+		data_source.title.toLowerCase().includes(searchQuery.value.toLowerCase()),
+	)
+})
+
+const showNewSourceDialog = ref(false)
+const showNewMariaDBDialog = ref(false)
+const showNewPostgreSQLDialog = ref(false)
+const showNewClickHouseDialog = ref(false)
+const showNewDuckDBDialog = ref(false)
+const showCSVFileUploadDialog = ref(false)
+
+const showConnectedAppDialog = ref(false)
+
+const sourceTypes = [
+	{ label: __('Connected app'), icon: <CSVIcon class="h-8 w-8" />, description: __('Read connected spreadsheets and app data'), onClick: () => { showNewSourceDialog.value = false; showConnectedAppDialog.value = true } },
+	{
+		label: __('MariaDB'),
+		icon: getDatabaseLogo('MariaDB'),
+		description: __('Connect to MariaDB database'),
+		onClick: () => {
+			showNewSourceDialog.value = false
+			showNewMariaDBDialog.value = true
+		},
+	},
+	{
+		label: __('PostgreSQL'),
+		icon: getDatabaseLogo('PostgreSQL'),
+		description: __('Connect to PostgreSQL database'),
+		onClick: () => {
+			showNewSourceDialog.value = false
+			showNewPostgreSQLDialog.value = true
+		},
+	},
+	{
+		label: __('ClickHouse'),
+		icon: getDatabaseLogo('ClickHouse'),
+		description: __('Connect to ClickHouse database'),
+		onClick: () => {
+			showNewSourceDialog.value = false
+			showNewClickHouseDialog.value = true
+		},
+	},
+	{
+		label: __('DuckDB'),
+		icon: getDatabaseLogo('DuckDB'),
+		description: __('Connect to DuckDB database'),
+		onClick: () => {
+			showNewSourceDialog.value = false
+			showNewDuckDBDialog.value = true
+		},
+	},
+	{
+		label: __('Upload CSV or Excel'),
+		icon: <CSVIcon class="h-8 w-8" />,
+		description: __('Upload a CSV or Excel file to create a new data source'),
+		onClick: () => {
+			showNewSourceDialog.value = false
+			showCSVFileUploadDialog.value = true
+		},
+	},
+]
+
+const userStore = useUserStore()
+const listOptions = ref({
+	columns: [
+		{
+			label: __('Title'),
+			key: 'title',
+			prefix: (props: any) => {
+				const data_source = props.row as DataSourceListItem
+				return getDatabaseLogo(data_source.database_type, 'sm')
+			},
+		},
+		{
+			label: __('Status'),
+			key: 'status',
+			prefix: (props: any) => {
+				const color =
+					props.row.status == 'Inactive' ? 'text-ink-gray-4' : 'text-ink-green-5'
+				return <IndicatorIcon class={color} />
+			},
+		},
+		{
+			label: __('Owner'),
+			key: 'owner',
+			getLabel(props: any) {
+				const data_source = props.row as DataSourceListItem
+				const user = userStore.getUser(data_source.owner)
+				return user?.full_name || data_source.owner
+			},
+			prefix: (props: any) => {
+				const data_source = props.row as DataSourceListItem
+				const imageUrl = userStore.getUser(data_source.owner)?.user_image
+				return <Avatar size="md" label={data_source.owner} image={imageUrl} />
+			},
+		},
+		{ label: __('Created'), key: 'created_from_now' },
+		{ label: __('Modified'), key: 'modified_from_now' },
+	],
+	rows: filteredDataSources,
+	rowKey: 'name',
+	options: {
+		showTooltip: false,
+		getRowRoute: (data_source: DataSourceListItem) => ({
+			path: `/data-source/${data_source.name}`,
+		}),
+		emptyState: {
+			title: __('No data sources.'),
+			description: __('No data sources to display.'),
+			button: {
+				label: __('New Data Source'),
+				variant: 'solid',
+				onClick: () => (showNewSourceDialog.value = true),
+			},
+		},
+	},
+})
+
+document.title = __('Data Sources | Business Intelligence')
+</script>
+
+<template>
+	<header class="flex h-12 items-center justify-between border-b py-2.5 pl-5 pr-2">
+		<Breadcrumbs :items="[{ label: __('Data Sources'), route: '/data-source' }]" />
+		<div class="flex items-center gap-2">
+			<Button
+				:label="__('New Data Source')"
+				variant="solid"
+				@click="showNewSourceDialog = true"
+			>
+				<template #prefix>
+					<PlusIcon class="w-4" />
+				</template>
+			</Button>
+		</div>
+	</header>
+
+	<div class="mb-4 flex h-full flex-col gap-3 overflow-auto px-5 py-3">
+		<div class="flex gap-2 overflow-visible py-1">
+			<FormControl placeholder="Search by Title" v-model="searchQuery" :debounce="300">
+				<template #prefix>
+					<SearchIcon class="h-4 w-4 text-ink-gray-4" />
+				</template>
+			</FormControl>
+		</div>
+		<ListView class="h-full" v-bind="listOptions"> </ListView>
+	</div>
+
+	<SelectTypeDialog
+		v-model="showNewSourceDialog"
+		:types="sourceTypes"
+		:title="__('Select a data source')"
+	/>
+
+	<ConnectedAppDialog v-model="showConnectedAppDialog" />
+	<ConnectMariaDBDialog v-model="showNewMariaDBDialog" />
+	<ConnectPostgreSQLDialog v-model="showNewPostgreSQLDialog" />
+	<ConnectClickhouseDialog v-model="showNewClickHouseDialog" />
+	<ConnectDuckDBDialog v-model="showNewDuckDBDialog" />
+	<UploadCSVFileDialog v-model="showCSVFileUploadDialog" />
+</template>

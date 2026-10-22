@@ -1,0 +1,225 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2022-06-30 17:59:52.181464",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "onboarding_section",
+  "enable_permissions",
+  "allow_download",
+  "max_export_rows",
+  "enable_data_store",
+  "disable_user_lookup",
+  "allowed_origins",
+  "max_records_to_sync",
+  "max_memory_usage",
+  "max_execution_time",
+  "integrations_section",
+  "telegram_account_id",
+  "telegram_channel_title",
+  "notify_subscriber_id",
+  "workflow_webhook_url",
+  "query_section",
+  "fiscal_year_start",
+  "week_starts_on",
+  "tab_break_tvwi",
+  "setup_complete",
+  "onboarding_complete",
+  "allow_subquery",
+  "auto_execute_query",
+  "query_result_expiry",
+  "query_result_limit"
+ ],
+ "fields": [
+  {
+   "default": "0",
+   "fieldname": "setup_complete",
+   "fieldtype": "Check",
+   "label": "Setup Complete"
+  },
+  {
+   "fieldname": "onboarding_section",
+   "fieldtype": "Section Break"
+  },
+  {
+   "default": "0",
+   "fieldname": "onboarding_complete",
+   "fieldtype": "Check",
+   "label": "Onboarding Complete"
+  },
+  {
+   "default": "0",
+   "fieldname": "auto_execute_query",
+   "fieldtype": "Check",
+   "label": "Auto Execute Query"
+  },
+  {
+   "default": "10",
+   "fieldname": "query_result_expiry",
+   "fieldtype": "Int",
+   "label": "Cache Query Results For (Minutes)"
+  },
+  {
+   "default": "0",
+   "fieldname": "allow_subquery",
+   "fieldtype": "Check",
+   "label": "Allow Subquery"
+  },
+  {
+   "default": "1000",
+   "fieldname": "query_result_limit",
+   "fieldtype": "Int",
+   "label": "Query Result Limit"
+  },
+  {
+   "default": "0",
+   "fieldname": "enable_permissions",
+   "fieldtype": "Check",
+   "label": "Enable Permissions"
+  },
+  {
+   "default": "1",
+   "fieldname": "allow_download",
+   "fieldtype": "Check",
+   "label": "Allow Data Download"
+  },
+  {
+   "default": "100000",
+   "fieldname": "max_export_rows",
+   "fieldtype": "Int",
+   "label": "Max Export Rows",
+   "non_negative": 1
+  },
+  {
+   "fieldname": "integrations_section",
+   "fieldtype": "Section Break",
+   "label": "Integrations"
+  },
+  {
+   "fieldname": "telegram_account_id",
+   "fieldtype": "Data",
+   "label": "Connected Alert Channel",
+   "read_only": 1
+  },
+  {
+   "fieldname": "telegram_channel_title",
+   "fieldtype": "Data",
+   "label": "Connected Channel Name",
+   "read_only": 1
+  },
+  {
+   "fieldname": "notify_subscriber_id",
+   "fieldtype": "Data",
+   "label": "Notification Subscriber"
+  },
+  {
+   "fieldname": "workflow_webhook_url",
+   "fieldtype": "Data",
+   "label": "Workflow Address"
+  },
+  {
+   "fieldname": "query_section",
+   "fieldtype": "Section Break",
+   "label": "Query"
+  },
+  {
+   "fieldname": "fiscal_year_start",
+   "fieldtype": "Date",
+   "label": "Fiscal Year Start"
+  },
+  {
+   "description": "Comma seperated URLs to whitelist for embedding charts & dashboards",
+   "fieldname": "allowed_origins",
+   "fieldtype": "Data",
+   "label": "Allowed Origins"
+  },
+  {
+   "fieldname": "max_records_to_sync",
+   "fieldtype": "Int",
+   "label": "Max Records To Sync",
+   "non_negative": 1
+  },
+  {
+   "default": "Monday",
+   "fieldname": "week_starts_on",
+   "fieldtype": "Select",
+   "label": "Week Starts On",
+   "options": "Monday\nTuesday\nWednesday\nThursday\nFriday\nSaturday\nSunday"
+  },
+  {
+   "fieldname": "tab_break_tvwi",
+   "fieldtype": "Tab Break",
+   "label": "Legacy"
+  },
+  {
+   "fieldname": "max_memory_usage",
+   "fieldtype": "Int",
+   "label": "Max Memory Usage",
+   "non_negative": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "enable_data_store",
+   "fieldtype": "Check",
+   "label": "Enable Data Store"
+  },
+  {
+   "default": "0",
+   "description": "Stops members from finding each other by name or email when sharing. Turn this on for a site where anyone can sign up.",
+   "fieldname": "disable_user_lookup",
+   "fieldtype": "Check",
+   "label": "Disable User Lookup"
+  },
+  {
+   "default": "60",
+   "description": "Interactive queries are cancelled after this many seconds. Applies to new connections and to live (non-data-store) queries; background imports are exempt.",
+   "fieldname": "max_execution_time",
+   "fieldtype": "Int",
+   "label": "Max Execution Time (Seconds)"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-09-21 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Insights",
+ "name": "Insights Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "Insights Admin",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "Insights User",
+   "share": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

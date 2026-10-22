@@ -1,0 +1,6 @@
+{% extends "templates/base.html" %}
+
+{% block base_scripts %}
+<script>frappe._ = frappe._ || {};</script>
+{{ super() }}
+{% endblock %}
