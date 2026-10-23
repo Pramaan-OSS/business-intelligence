@@ -3,6 +3,6 @@ set -euo pipefail
 python docker/setup.py
 cd /app/.runtime/bench/sites
 python -m frappe.utils.bench_helper frappe --site ci.localhost set-config allow_tests true
-# Script-dependent alert tests run only on this disposable site.
-python -m frappe.utils.bench_helper frappe --site ci.localhost set-config server_script_enabled true
+# The framework reads this switch only from the disposable bench config.
+python -m frappe.utils.bench_helper frappe --site ci.localhost set-config --global --parse server_script_enabled true
 python -m frappe.utils.bench_helper frappe --site ci.localhost run-tests --app insights
