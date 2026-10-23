@@ -7,7 +7,6 @@ as a hash, so the stored value is not the credential, and acceptance signs in
 only the account it just created.
 """
 
-from unittest.mock import patch
 from urllib.parse import quote
 
 import frappe

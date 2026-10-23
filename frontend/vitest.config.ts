@@ -22,6 +22,8 @@ export default defineConfig({
 		dedupe: ['vue', 'echarts', '@vueuse/core'],
 	},
 	test: {
+		maxThreads: 2,
+		minThreads: 1,
 		include: ['src2/**/*.test.ts'],
 		environment: 'node',
 		server: {

@@ -6,17 +6,17 @@ passes its own idempotency key. The strict in-memory fake is selected with
 ``PRAMAAN_FAKE=1`` and has no network transport.
 """
 
-from dataclasses import dataclass
-from typing import Literal
 import copy
 import json
 import math
 import os
 import time
+from dataclasses import dataclass
 from email.utils import parseaddr
-from urllib.parse import quote, urlparse
-from urllib.request import Request, build_opener, HTTPRedirectHandler
+from typing import ClassVar, Literal
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlparse
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 Feature = Literal[
     "alerts_email", "alerts_telegram", "alerts_notify", "alerts_workflow",
@@ -171,15 +171,15 @@ def _schema_json(value, label, path="#", stack=None, depth=0):
     stack = set() if stack is None else stack
     if depth > 32:
         raise InvalidGenerationRequest(label, path, "JSON value is too deep")
-    if value is None or isinstance(value, (str, bool, int)):
+    if value is None or isinstance(value, str | bool | int):
         return
     if isinstance(value, float) and math.isfinite(value):
         return
-    if not isinstance(value, (dict, list)) or id(value) in stack:
+    if not isinstance(value, dict | list) or id(value) in stack:
         raise InvalidGenerationRequest(label, path, "must contain finite JSON values without cycles")
     stack.add(id(value))
     for key, item in (value.items() if isinstance(value, dict) else enumerate(value)):
-        if not isinstance(key, (str, int)) or isinstance(value, dict) and not isinstance(key, str):
+        if not isinstance(key, str | int) or (isinstance(value, dict) and not isinstance(key, str)):
             raise InvalidGenerationRequest(label, path, "property names must be strings")
         _schema_json(item, label, _schema_path(path, key), stack, depth + 1)
     stack.remove(id(value))
@@ -232,7 +232,7 @@ def validate_json_schema(value, label="Response"):
                 fail(key, "must be an object")
             if key == "required" and (not isinstance(item, list) or any(not isinstance(t, str) for t in item) or len(set(item)) != len(item)):
                 fail(key, "must be distinct property names")
-            if key == "additionalProperties" and not isinstance(item, (bool, dict)):
+            if key == "additionalProperties" and not isinstance(item, bool | dict):
                 fail(key, "must be boolean or a schema")
             if key in {"anyOf", "enum"} and (not isinstance(item, list) or not 1 <= len(item) <= (16 if key == "anyOf" else 256)):
                 fail(key, "exceeds branch or value limit")
@@ -240,7 +240,7 @@ def validate_json_schema(value, label="Response"):
                 fail(key, "must be a string")
             if key == "examples" and not isinstance(item, list):
                 fail(key, "must be an array")
-            if key in SCHEMA_BOUNDS and (isinstance(item, bool) or not isinstance(item, (int, float)) or isinstance(item, float) and not math.isfinite(item) or key in {"minLength", "maxLength", "minItems", "maxItems"} and (not isinstance(item, int) or item < 0)):
+            if key in SCHEMA_BOUNDS and (isinstance(item, bool) or not isinstance(item, int | float) or (isinstance(item, float) and not math.isfinite(item)) or (key in {"minLength", "maxLength", "minItems", "maxItems"} and (not isinstance(item, int) or item < 0))):
                 fail(key, "invalid bound")
         for child, child_path in children(node, path):
             walk(child, child_path, depth + 1)
@@ -386,7 +386,7 @@ class PramaanClient:
                          "expiresIn": 900, "botUsername": "fixture_bot",
                          "instructions": ["Add the bot to the channel", "Send it the code"]}
         if method == "POST" and path == "social.connect.telegram.code.check":
-            status = (body or {}).get("code") == "fixture-code" and "connected" or "pending"
+            status = ((body or {}).get("code") == "fixture-code" and "connected") or "pending"
             result = {"status": status}
             if status == "connected":
                 result.update(accountId="fixture-account", chatTitle="Fixture channel")
@@ -415,7 +415,7 @@ class PramaanClient:
         if method == "POST" and urlparse(url).path == "/v1/files":
             return 201, {"fileId": "file_fixture00000000000000000000", "kind": "document",
                          "origin": "upload", "contentType": headers.get("Content-Type"),
-                         "sizeBytes": len(body) if isinstance(body, (bytes, bytearray)) else 0}
+                         "sizeBytes": len(body) if isinstance(body, bytes | bytearray) else 0}
         if method == "POST" and path == "apps.connections.list":
             return 200, {"results": [{"app": "fixture_sheets", "status": "active"}]}
         if method == "POST" and path == "apps.request.read":
@@ -484,7 +484,7 @@ class PramaanClient:
                 raise GenerationConfigurationError()
             if isinstance(remote_code, str) and remote_code == "connection_required":
                 raise ConnectionRequired()
-            if capability and (status == 501 or isinstance(remote_code, str) and remote_code in UNAVAILABLE_CODES):
+            if capability and (status == 501 or (isinstance(remote_code, str) and remote_code in UNAVAILABLE_CODES)):
                 raise PramaanNotAvailable(capability)
             code = "request_rejected"
             uncertain = method == "POST" and status >= 500
@@ -560,7 +560,7 @@ class PramaanClient:
         for attachment in attachments or []:
             name = attachment.get("name")
             data = attachment.get("content")
-            if not isinstance(name, str) or not name.strip() or not isinstance(data, (bytes, bytearray)) or not data:
+            if not isinstance(name, str) or not name.strip() or not isinstance(data, bytes | bytearray) or not data:
                 raise PramaanError("invalid_request")
             kind = attachment.get("kind") or (
                 "image" if attachment.get("content_type", "").startswith("image/") else "document"
@@ -718,7 +718,7 @@ class PramaanClient:
 
     # Feature contracts delivered on the platform catalogue; each stays false
     # until its own integration and fake checks are in place.
-    FEATURES = {
+    FEATURES: ClassVar[dict[str, bool]] = {
         "alerts_email": True,
         "alerts_telegram": True,
         "alerts_notify": True,

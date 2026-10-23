@@ -9,7 +9,7 @@ from insights.pramaan import PramaanError, get_client
 
 
 def addresses(value):
-    values = value if isinstance(value, (list, tuple)) else [value or ""]
+    values = value if isinstance(value, list | tuple) else [value or ""]
     return list(dict.fromkeys(address for _, address in getaddresses(values) if address))
 
 

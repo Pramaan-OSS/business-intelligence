@@ -20,7 +20,6 @@ from insights.insights.doctype.insights_data_source_v3.insights_data_source_v3 i
 from insights.permission_user import get_permission_user, permission_user
 from insights.pramaan import set_client
 from insights.tests.base import InsightsIntegrationTestCase
-from insights.tests.fake_client import FakeAlertClient
 from insights.tests.factories import (
     DT,
     as_user,
@@ -30,6 +29,7 @@ from insights.tests.factories import (
     delete_users,
     delete_workbooks,
 )
+from insights.tests.fake_client import FakeAlertClient
 
 PUBLISHER = "permission_user_publisher@test.com"
 EDITOR = "permission_user_editor@test.com"
@@ -148,7 +148,6 @@ class TestAlertRunsAsItsEnabler(InsightsIntegrationTestCase):
     def test_an_alert_that_cannot_run_tells_its_owner(self):
         """The enabler may not read the table the query now uses. The error used
         to reach only the Error Log."""
-        from unittest.mock import patch
 
         from insights.insights.doctype.insights_alert.insights_alert import send_alerts
 

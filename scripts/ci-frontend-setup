@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p vendor/framework
+if [ ! -d vendor/framework/.git ]; then
+  git init -q vendor/framework
+  git -C vendor/framework remote add origin https://github.com/frappe/frappe.git
+  git -C vendor/framework sparse-checkout set ui
+  git -C vendor/framework fetch --depth 1 origin e7ddbac9b5d9601e891dd57f01f4643a14f7f41c
+fi
+git -C vendor/framework checkout --detach e7ddbac9b5d9601e891dd57f01f4643a14f7f41c

@@ -4,7 +4,6 @@ and injected transports. No live call, no frappe import, no network."""
 import importlib.util
 import json
 import os
-import sys
 import unittest
 from pathlib import Path
 from urllib.error import HTTPError
@@ -115,7 +114,7 @@ class FakeClientTests(unittest.TestCase):
         self.assertIn("fileId", transport.calls[-1][3]["attachments"][0])
 
     def test_http_upload_sends_raw_bytes(self):
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
         response = MagicMock()
         response.__enter__.return_value = response
         response.status = 201
@@ -197,7 +196,7 @@ class TransportTests(unittest.TestCase):
     # @feature pramaan.client-contract
     def test_max_tokens_refusal_is_configuration_error(self):
         def respond(method, url, headers, body):
-            payload = json.dumps({"error": {"code": "invalid_request", "message": "maxTokens must be at least 1"}}).encode()
+            json.dumps({"error": {"code": "invalid_request", "message": "maxTokens must be at least 1"}}).encode()
             raise HTTPError(url, 400, "Bad Request", {}, None)
         def http_error_surface(method, url, headers, body):
             return 400, {"error": {"code": "invalid_request", "message": "maxTokens too small"}}

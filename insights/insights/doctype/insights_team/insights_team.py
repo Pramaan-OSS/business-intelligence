@@ -76,9 +76,8 @@ class InsightsTeam(Document):
 
     def capture_new_grants(self):
         before = self.get_doc_before_save()
-        held_before = set()
         if before:
-            held_before = {(d.resource_type, d.resource_name) for d in before.team_permissions}
+            {(d.resource_type, d.resource_name) for d in before.team_permissions}
 
 
     def prevent_admin_team_deletion(self):

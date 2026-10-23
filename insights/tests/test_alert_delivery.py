@@ -4,7 +4,12 @@ from unittest.mock import patch
 import frappe
 from frappe.tests import IntegrationTestCase
 
-from insights.api.alert_channels import check_channel_connect, disconnect_channel, get_alert_delivery, save_delivery_targets
+from insights.api.alert_channels import (
+    check_channel_connect,
+    disconnect_channel,
+    get_alert_delivery,
+    save_delivery_targets,
+)
 from insights.pramaan import PramaanClient, set_client
 
 

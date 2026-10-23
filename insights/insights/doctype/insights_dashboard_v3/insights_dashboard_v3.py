@@ -5,7 +5,6 @@ import re
 from collections.abc import Callable
 
 import frappe
-import requests
 from frappe.model.document import Document
 from frappe.query_builder import Interval
 from frappe.query_builder.functions import Now
@@ -788,8 +787,9 @@ def route_card_filters(chart: str, card_filters: list | None, adhoc_filters: dic
 def get_page_preview(url: str, headers: dict | None = None) -> bytes:
     """Render the preview in-process via headless Chromium — no outside
     service, and the site's own /assets and /files resolve locally."""
-    from frappe.utils.preview import get_preview_from_url
     import shutil
+
+    from frappe.utils.preview import get_preview_from_url
 
     if not shutil.which(frappe.get_common_site_config().get("chromium_path", "")):
         frappe.throw(frappe._("Local preview rendering is unavailable. Rebuild the application image to install its browser."))

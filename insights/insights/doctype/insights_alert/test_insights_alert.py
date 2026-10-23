@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import frappe
 from frappe.tests import IntegrationTestCase
-from frappe.utils import add_to_date, now_datetime, validate_email_address
+from frappe.utils import add_to_date, now_datetime
 
 from insights.insights.doctype.insights_alert.insights_alert import (
     ALERT_MAX_ROWS,
@@ -15,7 +15,6 @@ from insights.insights.doctype.insights_alert.insights_alert import (
 from insights.permission_user import permission_user
 from insights.pramaan import PramaanError, PramaanNotAvailable, set_client
 from insights.tests.base import InsightsIntegrationTestCase
-from insights.tests.fake_client import FakeAlertClient
 from insights.tests.factories import (
     as_user,
     create_test_query,
@@ -23,6 +22,7 @@ from insights.tests.factories import (
     create_user,
     delete_users,
 )
+from insights.tests.fake_client import FakeAlertClient
 
 
 def message_context(row_count=1):

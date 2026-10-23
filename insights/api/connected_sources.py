@@ -56,7 +56,7 @@ def checked_rows(result, key):
     rows = body.get(key) if key and isinstance(body, dict) else body
     if not isinstance(rows, list) or len(rows) > MAX_ROWS or any(not isinstance(row, dict) for row in rows):
         frappe.throw("Choose a rows field containing at most 1000 records.")
-    if any(not isinstance(k, str) or not k or len(k) > 128 or isinstance(v, (dict, list)) for row in rows for k, v in row.items()):
+    if any(not isinstance(k, str) or not k or len(k) > 128 or isinstance(v, dict | list) for row in rows for k, v in row.items()):
         frappe.throw("Records must contain named columns with plain values.")
     return rows
 
@@ -103,8 +103,8 @@ def sync_source(source):
         rows = checked_rows(result, source.connected_rows_key)
         import insights
         from insights.insights.doctype.insights_data_source_v3.data_warehouse import WarehouseTableWriter
-        from insights.insights.doctype.insights_table_v3.insights_table_v3 import InsightsTablev3
         from insights.insights.doctype.insights_data_source_v3.insights_data_source_v3 import after_request
+        from insights.insights.doctype.insights_table_v3.insights_table_v3 import InsightsTablev3
         after_request()
         if rows:
             frame = pd.DataFrame(rows)

@@ -1,11 +1,10 @@
 """Connected reads use the member binding and preserve complete local snapshots."""
-import os
 from unittest.mock import patch
 
 import frappe
-import insights
 from frappe.tests import IntegrationTestCase
 
+import insights
 from insights.api import connected_sources as sources
 from insights.insights.doctype.insights_data_source_v3.insights_data_source_v3 import after_request
 from insights.pramaan import PramaanClient, PramaanNotAvailable, set_client
@@ -37,7 +36,9 @@ class TestConnectedSources(IntegrationTestCase):
         self.assertEqual(doc.connected_user, "Administrator")
         self.assertEqual(doc.get_ibis_table("records").count().execute(), 2)
         with patch.object(self.client, "read_app", return_value={"status": 200, "body": {"rows": [{"name": "updated", "amount": 8}]}}) as read:
-            from insights.insights.doctype.insights_data_source_v3.data_warehouse import execute_warehouse_table_import
+            from insights.insights.doctype.insights_data_source_v3.data_warehouse import (
+                execute_warehouse_table_import,
+            )
             execute_warehouse_table_import(doc.name, "records")
         self.assertTrue(read.called)
         self.assertEqual(insights.warehouse.get_table(doc.name, "records").get_ibis_table().count().execute(), 1)

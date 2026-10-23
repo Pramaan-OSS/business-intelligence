@@ -1,3 +1,5 @@
+[![CI](https://github.com/Pramaan-OSS/business-intelligence/actions/workflows/ci.yml/badge.svg)](https://github.com/Pramaan-OSS/business-intelligence/actions/workflows/ci.yml)
+
 # Business Intelligence
 
 A self-hosted business intelligence tool: connect your databases, build queries, charts and

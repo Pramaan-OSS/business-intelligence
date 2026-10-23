@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="$PWD"
+build_bench="$root/.runtime/build-bench"
+mkdir -p "$build_bench/apps" "$build_bench/sites/assets"
+ln -sfn "$root/vendor/framework" "$build_bench/apps/frappe"
+ln -sfn "$root" "$build_bench/apps/insights"
+printf 'frappe\ninsights\n' > "$build_bench/sites/apps.txt"
+FRAPPE_BENCH_ROOT="$build_bench" FRAPPE_DOCKER_BUILD=1 npm --prefix frontend run build:islands
