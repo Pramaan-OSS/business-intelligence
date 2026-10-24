@@ -26,7 +26,9 @@ printf '{}' > "$build_bench/sites/assets/assets.json"
 (cd vendor/framework && npm install --no-audit --no-fund \
   && ln -sfn "$root/vendor/framework/node_modules" "$root/vendor/framework/frappe/public/node_modules" \
   && FRAPPE_BENCH_ROOT="$build_bench" npm run production)
-cp -R "$build_bench/sites/assets/frappe/dist" "$root/vendor/framework/frappe/public/dist"
+# Copy contents, not the directory: a pre-existing dist would nest the new files.
+mkdir -p "$root/vendor/framework/frappe/public/dist"
+cp -R "$build_bench/sites/assets/frappe/dist/." "$root/vendor/framework/frappe/public/dist/"
 uv venv --python 3.14 .venv
 uv pip install --python .venv/bin/python -r review/runtime-lock.txt
 uv pip install --python .venv/bin/python --no-deps -e vendor/framework -e .
@@ -38,6 +40,6 @@ yarn --cwd frontend install --frozen-lockfile
 yarn --cwd frontend build
 FRAPPE_BENCH_ROOT="$build_bench" yarn --cwd frontend build:islands
 # The built manifest and the island bundles serve through the runtime asset links.
-mkdir -p "$root/insights/public/dist"
-cp -R "$build_bench/sites/assets/insights/dist/island" "$root/insights/public/dist/island"
+mkdir -p "$root/insights/public/dist/island"
+cp -R "$build_bench/sites/assets/insights/dist/island/." "$root/insights/public/dist/island/"
 cp "$build_bench/sites/assets/assets.json" "$root/review/built-assets.json"
